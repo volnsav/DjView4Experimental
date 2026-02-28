@@ -1541,11 +1541,31 @@ QDjView::saveSession(QSettings *s)
 {
   Saved saved;
   updateSaved(&saved);
+  updateTabState(activeTabIndex);
   s->setValue("name", objectName());
   s->setValue("options", prefs->optionsToString(saved.options));
   s->setValue("state", saved.state);
   s->setValue("tools", prefs->toolsToString(tools));
   s->setValue("documentUrl", getDecoratedUrl().toString());
+  if (tabsEnabled())
+    {
+      int count = qMax(1, tabStates.size());
+      s->setValue("tabCount", count);
+      s->setValue("activeTab", qBound(0, activeTabIndex, count-1));
+      s->beginGroup("tabs");
+      s->remove("");
+      for (int i=0; i<count; ++i)
+        {
+          QUrl tabUrl;
+          if (i == activeTabIndex && document)
+            tabUrl = getDecoratedUrl();
+          else if (i < tabStates.size())
+            tabUrl = tabStates[i].url;
+          if (tabUrl.isValid())
+            s->setValue(QString::number(i), tabUrl.toString());
+        }
+      s->endGroup();
+    }
 }
 
 void  
@@ -1567,7 +1587,59 @@ QDjView::restoreSession(QSettings *s)
     setObjectName(s->value("name").toString());
   applySaved(&saved);
   updateActionsLater();
-  if (du.isValid())
+  if (tabsEnabled() && s->contains("tabCount"))
+    {
+      int count = qMax(1, s->value("tabCount").toInt());
+      int active = qBound(0, s->value("activeTab", 0).toInt(), count-1);
+      QList<TabState> restored;
+      s->beginGroup("tabs");
+      for (int i=0; i<count; ++i)
+        {
+          TabState ts;
+          QUrl tabUrl = QUrl(s->value(QString::number(i)).toString());
+          if (tabUrl.isValid())
+            {
+              ts.url = tabUrl;
+              ts.fileName = removeDjVuCgiArguments(tabUrl).toLocalFile();
+            }
+          restored << ts;
+        }
+      s->endGroup();
+      closeDocument();
+      tabsInternalChange = true;
+      while (documentTabs->count() > 0)
+        documentTabs->removeTab(documentTabs->count()-1);
+      tabsInternalChange = false;
+      tabStates.clear();
+      for (int i=0; i<restored.size(); ++i)
+        {
+          tabsInternalChange = true;
+          documentTabs->addTab(tr("Start"));
+          tabsInternalChange = false;
+          tabStates << restored[i];
+          updateTabVisuals(i);
+        }
+      activeTabIndex = qBound(0, active, tabStates.size()-1);
+      tabsInternalChange = true;
+      documentTabs->setCurrentIndex(activeTabIndex);
+      tabsInternalChange = false;
+      if (tabStates[activeTabIndex].url.isValid())
+        {
+          tabsForceCurrent = true;
+          const TabState ts = tabStates[activeTabIndex];
+          if (!ts.fileName.isEmpty() && QFileInfo(ts.fileName).exists())
+            open(ts.fileName);
+          else
+            open(ts.url);
+          tabsForceCurrent = false;
+        }
+      else
+        {
+          setWindowTitle(tr("DjView"));
+          layout->setCurrentWidget(splash);
+        }
+    }
+  else if (du.isValid())
     open(du);
   if (document && s->contains("pageNo")) // compat
     goToPage(s->value("pageNo", 0).toInt());
@@ -3951,6 +4023,18 @@ QDjView::startBrowser(QUrl url)
 void
 QDjView::closeEvent(QCloseEvent *event)
 {
+  if (viewerMode == STANDALONE)
+    {
+      QSettings s;
+      s.remove("last_session");
+      s.beginGroup("last_session");
+      s.setValue("windows", 1);
+      s.beginGroup("1");
+      saveSession(&s);
+      s.endGroup();
+      s.endGroup();
+      s.sync();
+    }
   // Close document.
   closeDocument();
   // Save options.
