@@ -64,8 +64,8 @@ class QShortcut;
 class QSettings;
 class QStackedLayout;
 class QStatusBar;
+class QTabBar;
 class QTimer;
-class QTabWidget;
 class QToolBar;
 
 
@@ -251,8 +251,21 @@ protected slots:
   void sslWhiteList(QString why, bool &okay);
   void authRequired(QString why, QString &user, QString &pass);
   void slideShowTimeout(bool reset=false);
+  void closeCurrentTab();
+  void tabChanged(int index);
+  void tabCloseRequested(int index);
 
 protected:
+  struct TabState {
+    QUrl url;
+    QString fileName;
+  };
+  bool tabsEnabled() const;
+  void updateTabState(int index);
+  void updateTabVisuals(int index);
+  int prepareTabForOpen(const QUrl &url, const QString &fileName, bool &createdNewTab);
+  void dropPreparedTab(int index);
+  void commitOpenToCurrentTab(const QUrl &url, const QString &fileName);
   // mode
   ViewerMode   viewerMode;
   // preferences
@@ -271,6 +284,12 @@ protected:
   QLabel             *splash;
   QDjVuWidget        *widget;
   QStackedLayout     *layout;
+  QTabBar            *documentTabs;
+  QList<TabState>     tabStates;
+  int                 activeTabIndex;
+  bool                tabsInternalChange;
+  bool                tabsSwitching;
+  bool                tabsForceCurrent;
   QMenu              *contextMenu;
   QMenu              *recentMenu;
   QMenuBar           *menuBar;
