@@ -11,6 +11,8 @@ rem   MSBUILD        - full path to MSBuild.exe
 
 set "ROOT=%~dp0"
 for %%I in ("%ROOT%.") do set "ROOT=%%~fI\"
+set "ROOT_DIR=%ROOT%"
+if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
 set "OUTDIR=%ROOT%build\Release_strict"
 
 if not defined DJVU_ROOT set "DJVU_ROOT=%ROOT%..\DjVuLibreExperimental"
@@ -105,6 +107,16 @@ if defined VCVARS_VER (
 )
 if errorlevel 1 exit /b 1
 
+call :resolve_git_ref "%ROOT_DIR%" APP_GIT_REF
+call :resolve_git_ref "%DJVU_ROOT%" LIB_GIT_REF
+> "%ROOT%src\build_git_info.h" (
+  echo #ifndef BUILD_GIT_INFO_H
+  echo #define BUILD_GIT_INFO_H
+  echo #define DJVIEW_APP_GIT_REF "!APP_GIT_REF!"
+  echo #define DJVIEW_LIB_GIT_REF "!LIB_GIT_REF!"
+  echo #endif
+)
+
 rem djview pre-build already triggers libdjvulibre build from DjVuLibreExperimental.
 "%MSBUILD%" "%ROOT%src\djview.vcxproj" /m /p:Configuration=Release /p:Platform=x64 /p:TrackFileAccess=false
 if errorlevel 1 exit /b 1
@@ -167,4 +179,32 @@ if exist "%QT_TRANSLATIONS_DIR%" (
 
 echo.
 echo Combined runtime is ready in: %OUTDIR%
+exit /b 0
+
+:resolve_git_ref
+set "REPO=%~1"
+set "OUTVAR=%~2"
+set "REF=unknown"
+if "%REPO:~-1%"=="\" set "REPO=%REPO:~0,-1%"
+if exist "%REPO%\.git" (
+  for /f "delims=" %%I in ('git -C "%REPO%" describe --tags --exact-match 2^>nul') do set "REF=%%I"
+  if /I "!REF!"=="unknown" (
+    set "BRANCH="
+    set "HASH="
+    for /f "delims=" %%I in ('git -C "%REPO%" rev-parse --abbrev-ref HEAD 2^>nul') do set "BRANCH=%%I"
+    for /f "delims=" %%I in ('git -C "%REPO%" rev-parse --short HEAD 2^>nul') do set "HASH=%%I"
+    if defined HASH (
+      if defined BRANCH (
+        if /I "!BRANCH!"=="HEAD" (
+          set "REF=!HASH!"
+        ) else (
+          set "REF=!BRANCH!+!HASH!"
+        )
+      ) else (
+        set "REF=!HASH!"
+      )
+    )
+  )
+)
+set "%OUTVAR%=%REF%"
 exit /b 0

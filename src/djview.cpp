@@ -309,8 +309,10 @@ QDjViewApplication::loadTranslators(QStringList langs,
       bool okay = true;
       if (okay && dTrans && !loadOneTranslator(dTrans, "djview", lang, dirs))
         okay = false;
-      if (okay && qTrans && !loadOneTranslator(qTrans, "qt", lang, dirs))
-        okay = false;
+      // Qt translator is optional. App translations should still work even
+      // when qt_*.qm is unavailable for the selected language.
+      if (okay && qTrans)
+        loadOneTranslator(qTrans, "qt", lang, dirs);
       if (okay || lang.startsWith("en_") || lang == "en")
         return okay;
     }

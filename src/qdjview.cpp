@@ -85,6 +85,7 @@
 #include <QString>
 #include <QStyle>
 #include <QStyleOptionComboBox>
+#include <QSysInfo>
 #include <QTextDocument>
 #include <QTextStream>
 #include <QTimer>
@@ -116,6 +117,7 @@
 #include "qdjviewprefs.h"
 #include "qdjviewdialogs.h"
 #include "qdjviewsidebar.h"
+#include "build_git_info.h"
 
 
 
@@ -4415,21 +4417,38 @@ QDjView::pageComboEdited(void)
 void
 QDjView::performAbout(void)
 {
-  QStringList version;
-#if DDJVUAPI_VERSION >= 20
-  version << QString(ddjvu_get_version_string());
+#if defined(__x86_64__) || defined(_M_X64)
+  const char *buildArch = "x64";
+#elif defined(__i386__) || defined(_M_IX86)
+  const char *buildArch = "x86";
+#elif defined(__aarch64__) || defined(_M_ARM64)
+  const char *buildArch = "arm64";
+#elif defined(__arm__) || defined(_M_ARM)
+  const char *buildArch = "arm";
+#elif defined(__riscv) || defined(__riscv__)
+  const char *buildArch = "riscv";
+#else
+  const char *buildArch = "unknown";
 #endif
+
+  QStringList version;
+  version << QString("App-%1").arg(QString::fromLatin1(DJVIEW_APP_GIT_REF));
+  version << QString("DjVuLibre-%1").arg(QString::fromLatin1(DJVIEW_LIB_GIT_REF));
+  version << QString("Build-%1").arg(QString::fromLatin1(buildArch));
 #ifdef QT_VERSION
   version << QString("Qt-%1").arg(qVersion());
 #endif
+  version << QString("Platform-%1/%2")
+    .arg(QSysInfo::prettyProductName())
+    .arg(QSysInfo::currentCpuArchitecture());
   QString versioninfo = "";
   if (version.size() > 0)
     versioninfo = "(" + version.join(", ") + ")";
   QString html = tr8("<html>"
-       "<h2>DjVuLibre DjView %1</h2>%2"
+       "<h2>DjVuLibre %1 DjView %2</h2>%3"
        "<p>"
        "Viewer for DjVu documents<br>"
-       "<a href=%3>%3</a><br>"
+       "<a href=%4>%4</a><br>"
        "Copyright \302\251 2006-- L\303\251on Bottou."
        "</p>"
        "<p align=justify><small>"
@@ -4441,6 +4460,7 @@ QDjView::performAbout(void)
        "See the GNU General Public License for more details."
        "</small></p>"
        "</html>")
+    .arg(QLatin1String(DJVULIBRE_UI_VERSION_STR))
     .arg(QDjViewPrefs::versionString())
     .arg(versioninfo)
     .arg("http://djvu.sourceforge.net");

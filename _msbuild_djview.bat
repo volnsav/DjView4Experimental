@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 
 rem Optional overrides:
 rem   VCVARS     - full path to vcvars64.bat
@@ -7,9 +7,14 @@ rem   VCVARS_VER - optional vcvars toolset version
 rem   MSBUILD    - full path to MSBuild.exe
 rem   VCPKG_ROOT - path to vcpkg root (for lrelease)
 rem   VCPKG_TRIPLET - vcpkg triplet (default: x64-windows)
+rem   DJVU_ROOT  - path to DjVuLibreExperimental root
 
 set "ROOT=%~dp0"
+set "ROOT_DIR=%ROOT%"
+if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
 if not defined VCPKG_TRIPLET set "VCPKG_TRIPLET=x64-windows"
+if not defined DJVU_ROOT set "DJVU_ROOT=%ROOT%..\DjVuLibreExperimental"
+for %%I in ("%DJVU_ROOT%") do set "DJVU_ROOT=%%~fI"
 
 if not defined VCVARS (
   for /d %%D in ("C:\Program Files\Microsoft Visual Studio\*") do (
@@ -55,6 +60,16 @@ if defined VCVARS_VER (
   call "%VCVARS%"
 )
 if errorlevel 1 exit /b 1
+
+call :resolve_git_ref "%ROOT_DIR%" APP_GIT_REF
+call :resolve_git_ref "%DJVU_ROOT%" LIB_GIT_REF
+> "%ROOT%src\build_git_info.h" (
+  echo #ifndef BUILD_GIT_INFO_H
+  echo #define BUILD_GIT_INFO_H
+  echo #define DJVIEW_APP_GIT_REF "!APP_GIT_REF!"
+  echo #define DJVIEW_LIB_GIT_REF "!LIB_GIT_REF!"
+  echo #endif
+)
 
 "%MSBUILD%" "%ROOT%src\djview.vcxproj" /m /p:Configuration=Release /p:Platform=x64 /p:TrackFileAccess=false
 if errorlevel 1 exit /b %errorlevel%
@@ -106,4 +121,32 @@ if exist "%QT_TRANSLATIONS_DIR%" (
 
 echo.
 echo Translations are ready in: %LANG_OUT%
+exit /b 0
+
+:resolve_git_ref
+set "REPO=%~1"
+set "OUTVAR=%~2"
+set "REF=unknown"
+if "%REPO:~-1%"=="\" set "REPO=%REPO:~0,-1%"
+if exist "%REPO%\.git" (
+  for /f "delims=" %%I in ('git -C "%REPO%" describe --tags --exact-match 2^>nul') do set "REF=%%I"
+  if /I "!REF!"=="unknown" (
+    set "BRANCH="
+    set "HASH="
+    for /f "delims=" %%I in ('git -C "%REPO%" rev-parse --abbrev-ref HEAD 2^>nul') do set "BRANCH=%%I"
+    for /f "delims=" %%I in ('git -C "%REPO%" rev-parse --short HEAD 2^>nul') do set "HASH=%%I"
+    if defined HASH (
+      if defined BRANCH (
+        if /I "!BRANCH!"=="HEAD" (
+          set "REF=!HASH!"
+        ) else (
+          set "REF=!BRANCH!+!HASH!"
+        )
+      ) else (
+        set "REF=!HASH!"
+      )
+    )
+  )
+)
+set "%OUTVAR%=%REF%"
 exit /b 0
