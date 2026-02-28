@@ -56,9 +56,15 @@
 #if QT_VERSION >= 0x040600
 #include <QGesture>
 #endif
-#ifdef QT_OPENGL_LIB
-# include <QGLWidget>
-# include <QGLFormat>
+#if QT_VERSION >= 0x050000
+# ifdef QT_OPENGLWIDGETS_LIB
+#  include <QOpenGLWidget>
+# endif
+#else
+# ifdef QT_OPENGL_LIB
+#  include <QGLWidget>
+#  include <QGLFormat>
+# endif
 #endif
 
 #if DDJVUAPI_VERSION < 17
@@ -223,9 +229,9 @@ qcursor_by_name(const char *s, int hotx=8, int hoty=8)
 
 
 #if QT_VERSION > 0x50800
-# define foreachrect(r,rgn) foreach(r,rgn)
+# define foreachrect(r,rgn) for (r : (rgn))
 #else
-# define foreachrect(r,rgn) foreach(r,(rgn).rects())
+# define foreachrect(r,rgn) for (r : (rgn).rects())
 #endif
 
 static QRegion
@@ -341,7 +347,7 @@ miniexp_get_color(miniexp_t &r, QColor &color)
   const char *s = miniexp_to_name(miniexp_car(r));
   if (! (s && s[0]=='#')) 
     return false;
-  color.setNamedColor(QString::fromUtf8(s));
+  color = QColor::fromString(QString::fromUtf8(s));
   if (! color.isValid()) 
     return false;
   r = miniexp_cdr(r);
@@ -2040,7 +2046,15 @@ QDjVuPrivate::initWidget(bool opengl)
   if (opengl)
     {
       const char *ge = 0;
-#ifdef QT_OPENGL_LIB
+#if QT_VERSION >= 0x050000
+# ifdef QT_OPENGLWIDGETS_LIB
+      QOpenGLWidget *gw = new QOpenGLWidget();
+      gw->setFocusPolicy(Qt::ClickFocus);
+      widget->setViewport(gw);
+# else
+      ge = "disabled at compilation time";
+# endif
+#elif defined(QT_OPENGL_LIB)
       QGLWidget *gw = 0;
       if (! QGLFormat::hasOpenGL())
         ge = "cannot find openGL on this system";
@@ -2164,6 +2178,22 @@ QDjVuDocument *
 QDjVuWidget::document(void) const
 {
   return priv->doc;
+}
+
+bool
+QDjVuWidget::isOpenGLRendering(void) const
+{
+#if QT_VERSION >= 0x050000
+# ifdef QT_OPENGLWIDGETS_LIB
+  return qobject_cast<QOpenGLWidget*>(viewport()) != 0;
+# else
+  return false;
+# endif
+#elif defined(QT_OPENGL_LIB)
+  return qobject_cast<QGLWidget*>(viewport()) != 0;
+#else
+  return false;
+#endif
 }
 
 /*! Specify the \a QDjVuDocument shown by this widget.
@@ -5598,7 +5628,7 @@ QDjVuLens::event(QEvent *event)
     case QEvent::MouseMove:
       {
         QMouseEvent *oldEvent = (QMouseEvent*)event;
-        QPoint pos = oldEvent->globalPos();
+        QPoint pos = oldEvent->globalPosition().toPoint();
         QMouseEvent newEvent(oldEvent->type(),
                              widget->viewport()->mapFromGlobal(pos),
                              pos, oldEvent->button(), oldEvent->buttons(),

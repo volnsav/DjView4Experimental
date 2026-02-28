@@ -44,6 +44,7 @@
 #include <QListView>
 #include <QMap>
 #include <QMenu>
+#include <QMetaType>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
@@ -289,7 +290,7 @@ QDjViewOutline::searchItem(QTreeWidgetItem *item, int pageno,
                            QTreeWidgetItem *&fi, int &fp)
 {
   QVariant data = item->data(0, Qt::UserRole);
-  if (data.type() == QVariant::Int)
+  if (data.userType() == QMetaType::Int)
     {
       int page = data.toInt();
       if (page>=0 && page<=pageno && page>fp)
@@ -307,13 +308,13 @@ void
 QDjViewOutline::itemActivated(QTreeWidgetItem *item)
 {
   QVariant data = item->data(0, Qt::UserRole+1);
-  if (data.type() == QVariant::String)
+  if (data.userType() == QMetaType::QString)
     {
       QString link = data.toString();
       if (link.size() > 0)
         djview->goToLink(link);
     }
-  else if (data.type() == QVariant::Int)
+  else if (data.userType() == QMetaType::Int)
     {
       int pageno = data.toInt();
       if (pageno >= 0)
@@ -777,7 +778,7 @@ QDjViewThumbnails::updateActions(void)
   foreach(action, menu->actions())
     {
       QVariant data = action->data();
-      if (data.type() == QVariant::Bool)
+      if (data.userType() == QMetaType::Bool)
         action->setChecked(smart);
       else
         action->setChecked(data.toInt() == size);

@@ -145,6 +145,19 @@ addQueryItem(QueryItems &items, const QString &k, const QString &v)
   items.append(qMakePair(k,v));
 }
 
+static QString
+systemErrorString(int err)
+{
+#ifdef Q_OS_WIN
+  char buffer[256] = {0};
+  if (::strerror_s(buffer, sizeof(buffer), err) == 0)
+    return QString::fromLocal8Bit(buffer);
+  return QString();
+#else
+  return QString::fromLocal8Bit(::strerror(err));
+#endif
+}
+
 static bool
 hasQueryItem(const QueryItems &items, QString key, bool afterDjvuOpts=true)
 {
@@ -1641,7 +1654,7 @@ parse_highlight(QString value,
   QString c = val[4];
   if (c[0] != '#')
     c = "#" + c;
-  color.setNamedColor(c);
+  color = QColor::fromString(c);
   if (! color.isValid())
     return false;
   if (val.size() <= 5)
@@ -1923,7 +1936,7 @@ QDjView::parseArgument(QString key, QString value)
   else if (key == "background")
     {
       QColor color;
-      color.setNamedColor((value[0] == '#') ? value : "#" + value);
+      color = QColor::fromString((value[0] == '#') ? value : "#" + value);
       if (color.isValid())
         {
           QBrush brush = QBrush(color);
@@ -2418,7 +2431,7 @@ QDjView::QDjView(QDjVuContext &context, ViewerMode mode, QWidget *parent)
 
   // Try using GLWidget?
   bool useOpenGL = prefs->openGLAccel;
-  QString envOpenGL = QString::fromLocal8Bit(::getenv("DJVIEW_OPENGL"));
+  QString envOpenGL = qEnvironmentVariable("DJVIEW_OPENGL");
   useOpenGL |= string_is_on(envOpenGL);
   useOpenGL &= !string_is_off(envOpenGL);
   if (viewerMode < STANDALONE)
@@ -3603,7 +3616,7 @@ QDjView::saveTextFile(QString text, QString filename)
       QString message = file.errorString();
 #if HAVE_STRERROR
       if (file.error() == QFile::OpenError && errno > 0)
-        message = strerror(errno);
+        message = systemErrorString(errno);
 #endif
       QMessageBox::critical(this, 
                             tr("Error - DjView", "dialog caption"),
@@ -3668,7 +3681,7 @@ QDjView::saveImageFile(QImage image, QString filename)
         message = tr("Image format %1 not supported.").arg(suffix.toUpper());
 #if HAVE_STRERROR
       else if (file.error() == QFile::OpenError && errno > 0)
-        message = strerror(errno);
+        message = systemErrorString(errno);
 #endif
       QMessageBox::critical(this,
                             tr("Error - DjView", "dialog caption"),
@@ -3700,14 +3713,14 @@ QDjView::startBrowser(QUrl url)
 #endif
 #ifdef Q_OS_UNIX
   browsers << "x-www-browser" << "firefox" << "konqueror";
-  const char *varBrowser = ::getenv("BROWSER");
-  if (varBrowser && varBrowser[0])
-    browsers = QFile::decodeName(varBrowser).split(":") + browsers;
+  QString varBrowser = qEnvironmentVariable("BROWSER");
+  if (!varBrowser.isEmpty())
+    browsers = varBrowser.split(":") + browsers;
   browsers << "sensible-browser";
-  const char *varPath = ::getenv("PATH");
+  QString varPath = qEnvironmentVariable("PATH");
   QStringList path;
-  if (varPath && varPath[0])
-    path = QFile::decodeName(varPath).split(":");
+  if (!varPath.isEmpty())
+    path = varPath.split(":");
   path << ".";
 #endif
   if (! prefs->browserProgram.isEmpty())
@@ -4438,6 +4451,7 @@ QDjView::performAbout(void)
 #ifdef QT_VERSION
   version << QString("Qt-%1").arg(qVersion());
 #endif
+  version << QString("Renderer-%1").arg((widget && widget->isOpenGLRendering()) ? "OpenGL" : "Raster");
   version << QString("Platform-%1/%2")
     .arg(QSysInfo::prettyProductName())
     .arg(QSysInfo::currentCpuArchitecture());
@@ -4918,7 +4932,7 @@ static int qstring_puts(const char *s)
 {
   if (qstring_puts_data)
     (*qstring_puts_data) += s;
-  return strlen(s);
+  return static_cast<int>(strlen(s));
 }
 
 static QString
@@ -4943,7 +4957,7 @@ qstring_puts(miniexp_io_t *io, const char *s)
 {
   QByteArray *bap = (QByteArray*)io->data[1];
   if (bap) *bap += s;
-  return strlen(s);
+  return static_cast<int>(strlen(s));
 }
 
 static QString

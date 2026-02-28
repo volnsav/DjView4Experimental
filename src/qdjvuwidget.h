@@ -171,6 +171,7 @@ public:
   QDjVuWidget(QDjVuDocument *doc, bool opengl, QWidget *parent=0);
   
   QDjVuDocument *document(void) const;
+  bool isOpenGLRendering(void) const;
   int page(void) const;
   QPoint hotSpot(void) const;
   Position position(void) const;

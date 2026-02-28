@@ -73,7 +73,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Debug|x64&apos;">
     <ClCompile>
-      <AdditionalIncludeDirectories>.;$(DjvuRoot);$(VcpkgInstalledDir)\include\Qt6;$(VcpkgInstalledDir)\include\Qt6\QtPrintSupport;$(VcpkgInstalledDir)\include\Qt6\QtWidgets;$(VcpkgInstalledDir)\include\Qt6\QtGui;$(VcpkgInstalledDir)\include\Qt6\QtNetwork;$(VcpkgInstalledDir)\include\Qt6\QtCore;debug;.;$(VcpkgInstalledDir)\share\Qt6\mkspecs\win32-msvc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.;$(DjvuRoot);$(VcpkgInstalledDir)\include\Qt6;$(VcpkgInstalledDir)\include\Qt6\QtPrintSupport;$(VcpkgInstalledDir)\include\Qt6\QtWidgets;$(VcpkgInstalledDir)\include\Qt6\QtGui;$(VcpkgInstalledDir)\include\Qt6\QtNetwork;$(VcpkgInstalledDir)\include\Qt6\QtOpenGL;$(VcpkgInstalledDir)\include\Qt6\QtOpenGLWidgets;$(VcpkgInstalledDir)\include\Qt6\QtCore;debug;.;$(VcpkgInstalledDir)\share\Qt6\mkspecs\win32-msvc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>-Zc:rvalueCast -Zc:inline -Zc:strictStrings -Zc:throwingNew -permissive- -Zc:__cplusplus -Zc:externConstexpr -utf-8 -w34100 -w34189 -w44456 -w44457 -w44458 %(AdditionalOptions)</AdditionalOptions>
       <AssemblerListingLocation>debug\</AssemblerListingLocation>
       <BrowseInformation>false</BrowseInformation>
@@ -83,7 +83,7 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
       <ObjectFileName>debug\</ObjectFileName>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>_WINDOWS;UNICODE;_UNICODE;WIN32;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;WITH_DJVIEWPLUGIN;QT_PRINTSUPPORT_LIB;QT_WIDGETS_LIB;QT_GUI_LIB;QT_NETWORK_LIB;QT_CORE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_WINDOWS;UNICODE;_UNICODE;WIN32;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;WITH_DJVIEWPLUGIN;QT_PRINTSUPPORT_LIB;QT_WIDGETS_LIB;QT_OPENGLWIDGETS_LIB;QT_OPENGL_LIB;QT_GUI_LIB;QT_NETWORK_LIB;QT_CORE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessToFile>false</PreprocessToFile>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <SuppressStartupBanner>true</SuppressStartupBanner>
@@ -92,7 +92,7 @@
       <WarningLevel>Level3</WarningLevel>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>$(DjvuRoot)\windows\build\$(Configuration)\$(Platform)\libdjvulibre.lib;$(VcpkgInstalledDir)\lib\Qt6PrintSupportd.lib;$(VcpkgInstalledDir)\lib\Qt6Widgetsd.lib;$(VcpkgInstalledDir)\lib\Qt6Guid.lib;$(VcpkgInstalledDir)\lib\Qt6Networkd.lib;$(VcpkgInstalledDir)\lib\Qt6Cored.lib;$(VcpkgInstalledDir)\lib\Qt6EntryPointd.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(DjvuRoot)\windows\build\$(Configuration)\$(Platform)\libdjvulibre.lib;$(VcpkgInstalledDir)\lib\Qt6PrintSupportd.lib;$(VcpkgInstalledDir)\lib\Qt6Widgetsd.lib;$(VcpkgInstalledDir)\lib\Qt6OpenGLWidgetsd.lib;$(VcpkgInstalledDir)\lib\Qt6OpenGLd.lib;$(VcpkgInstalledDir)\lib\Qt6Guid.lib;$(VcpkgInstalledDir)\lib\Qt6Networkd.lib;$(VcpkgInstalledDir)\lib\Qt6Cored.lib;$(VcpkgInstalledDir)\lib\Qt6EntryPointd.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(DjvuRoot)\windows\build\$(Configuration)\$(Platform);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>&quot;/MANIFESTDEPENDENCY:type=&apos;win32&apos; name=&apos;Microsoft.Windows.Common-Controls&apos; version=&apos;6.0.0.0&apos; publicKeyToken=&apos;6595b64144ccf1df&apos; language=&apos;*&apos; processorArchitecture=&apos;*&apos;&quot; %(AdditionalOptions)</AdditionalOptions>
       <DataExecutionPrevention>true</DataExecutionPrevention>
@@ -112,12 +112,12 @@
       <Command>&quot;$(MSBuildExePath)&quot; &quot;$(DjvuRoot)\windows\djvulibre\djvulibre.sln&quot; /m /t:libdjvulibre /p:Configuration=$(Configuration) /p:Platform=$(Platform) /p:DjvuPlatformToolset=v145</Command>
     </PreBuildEvent>
     <ResourceCompile>
-      <PreprocessorDefinitions>_WINDOWS;UNICODE;_UNICODE;WIN32;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;WITH_DJVIEWPLUGIN;QT_PRINTSUPPORT_LIB;QT_WIDGETS_LIB;QT_GUI_LIB;QT_NETWORK_LIB;QT_CORE_LIB;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_WINDOWS;UNICODE;_UNICODE;WIN32;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;WITH_DJVIEWPLUGIN;QT_PRINTSUPPORT_LIB;QT_WIDGETS_LIB;QT_OPENGLWIDGETS_LIB;QT_OPENGL_LIB;QT_GUI_LIB;QT_NETWORK_LIB;QT_CORE_LIB;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="&apos;$(Configuration)|$(Platform)&apos;==&apos;Release|x64&apos;">
     <ClCompile>
-      <AdditionalIncludeDirectories>.;$(DjvuRoot);$(VcpkgInstalledDir)\include\Qt6;$(VcpkgInstalledDir)\include\Qt6\QtPrintSupport;$(VcpkgInstalledDir)\include\Qt6\QtWidgets;$(VcpkgInstalledDir)\include\Qt6\QtGui;$(VcpkgInstalledDir)\include\Qt6\QtNetwork;$(VcpkgInstalledDir)\include\Qt6\QtCore;release;.;$(VcpkgInstalledDir)\share\Qt6\mkspecs\win32-msvc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>.;$(DjvuRoot);$(VcpkgInstalledDir)\include\Qt6;$(VcpkgInstalledDir)\include\Qt6\QtPrintSupport;$(VcpkgInstalledDir)\include\Qt6\QtWidgets;$(VcpkgInstalledDir)\include\Qt6\QtGui;$(VcpkgInstalledDir)\include\Qt6\QtNetwork;$(VcpkgInstalledDir)\include\Qt6\QtOpenGL;$(VcpkgInstalledDir)\include\Qt6\QtOpenGLWidgets;$(VcpkgInstalledDir)\include\Qt6\QtCore;release;.;$(VcpkgInstalledDir)\share\Qt6\mkspecs\win32-msvc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AdditionalOptions>-Zc:rvalueCast -Zc:inline -Zc:strictStrings -Zc:throwingNew -permissive- -Zc:__cplusplus -Zc:externConstexpr -utf-8 -w34100 -w34189 -w44456 -w44457 -w44458 %(AdditionalOptions)</AdditionalOptions>
       <AssemblerListingLocation>release\</AssemblerListingLocation>
       <BrowseInformation>false</BrowseInformation>
@@ -127,7 +127,7 @@
       <LanguageStandard>stdcpp17</LanguageStandard>
       <ObjectFileName>release\</ObjectFileName>
       <Optimization>MaxSpeed</Optimization>
-      <PreprocessorDefinitions>_WINDOWS;UNICODE;_UNICODE;WIN32;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;NDEBUG;QT_NO_DEBUG;QT_NO_DEBUG_STREAM;WITH_DJVIEWPLUGIN;NDEBUG;QT_NO_DEBUG;QT_PRINTSUPPORT_LIB;QT_WIDGETS_LIB;QT_GUI_LIB;QT_NETWORK_LIB;QT_CORE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_WINDOWS;UNICODE;_UNICODE;WIN32;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;NDEBUG;QT_NO_DEBUG;QT_NO_DEBUG_STREAM;WITH_DJVIEWPLUGIN;NDEBUG;QT_NO_DEBUG;QT_PRINTSUPPORT_LIB;QT_WIDGETS_LIB;QT_OPENGLWIDGETS_LIB;QT_OPENGL_LIB;QT_GUI_LIB;QT_NETWORK_LIB;QT_CORE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessToFile>false</PreprocessToFile>
       <ProgramDataBaseFileName></ProgramDataBaseFileName>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
@@ -137,7 +137,7 @@
       <WarningLevel>Level3</WarningLevel>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>$(DjvuRoot)\windows\build\$(Configuration)\$(Platform)\libdjvulibre.lib;$(VcpkgInstalledDir)\lib\Qt6PrintSupport.lib;$(VcpkgInstalledDir)\lib\Qt6Widgets.lib;$(VcpkgInstalledDir)\lib\Qt6Gui.lib;$(VcpkgInstalledDir)\lib\Qt6Network.lib;$(VcpkgInstalledDir)\lib\Qt6Core.lib;$(VcpkgInstalledDir)\lib\Qt6EntryPoint.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>$(DjvuRoot)\windows\build\$(Configuration)\$(Platform)\libdjvulibre.lib;$(VcpkgInstalledDir)\lib\Qt6PrintSupport.lib;$(VcpkgInstalledDir)\lib\Qt6Widgets.lib;$(VcpkgInstalledDir)\lib\Qt6OpenGLWidgets.lib;$(VcpkgInstalledDir)\lib\Qt6OpenGL.lib;$(VcpkgInstalledDir)\lib\Qt6Gui.lib;$(VcpkgInstalledDir)\lib\Qt6Network.lib;$(VcpkgInstalledDir)\lib\Qt6Core.lib;$(VcpkgInstalledDir)\lib\Qt6EntryPoint.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>$(DjvuRoot)\windows\build\$(Configuration)\$(Platform);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalOptions>&quot;/MANIFESTDEPENDENCY:type=&apos;win32&apos; name=&apos;Microsoft.Windows.Common-Controls&apos; version=&apos;6.0.0.0&apos; publicKeyToken=&apos;6595b64144ccf1df&apos; language=&apos;*&apos; processorArchitecture=&apos;*&apos;&quot; %(AdditionalOptions)</AdditionalOptions>
       <DataExecutionPrevention>true</DataExecutionPrevention>
@@ -160,7 +160,7 @@
       <Command>&quot;$(MSBuildExePath)&quot; &quot;$(DjvuRoot)\windows\djvulibre\djvulibre.sln&quot; /m /t:libdjvulibre /p:Configuration=$(Configuration) /p:Platform=$(Platform) /p:DjvuPlatformToolset=v145</Command>
     </PreBuildEvent>
     <ResourceCompile>
-      <PreprocessorDefinitions>_WINDOWS;UNICODE;_UNICODE;WIN32;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;NDEBUG;QT_NO_DEBUG;QT_NO_DEBUG_STREAM;WITH_DJVIEWPLUGIN;NDEBUG;QT_NO_DEBUG;QT_PRINTSUPPORT_LIB;QT_WIDGETS_LIB;QT_GUI_LIB;QT_NETWORK_LIB;QT_CORE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_WINDOWS;UNICODE;_UNICODE;WIN32;_ENABLE_EXTENDED_ALIGNED_STORAGE;WIN64;NDEBUG;QT_NO_DEBUG;QT_NO_DEBUG_STREAM;WITH_DJVIEWPLUGIN;NDEBUG;QT_NO_DEBUG;QT_PRINTSUPPORT_LIB;QT_WIDGETS_LIB;QT_OPENGLWIDGETS_LIB;QT_OPENGL_LIB;QT_GUI_LIB;QT_NETWORK_LIB;QT_CORE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -721,6 +721,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>
+
 
 
 

@@ -89,6 +89,27 @@
 #include "qdjviewprefs.h"
 #include "qdjviewdialogs.h"
 #include "qdjviewexporters.h"
+
+static QString
+systemErrorString(int err)
+{
+#ifdef Q_OS_WIN
+  char buffer[256] = {0};
+  if (::strerror_s(buffer, sizeof(buffer), err) == 0)
+    return QString::fromLocal8Bit(buffer);
+  return QString();
+#else
+  return QString::fromLocal8Bit(::strerror(err));
+#endif
+}
+
+#ifdef Q_OS_WIN
+# define djv_fdopen _fdopen
+# define djv_close _close
+#else
+# define djv_fdopen fdopen
+# define djv_close close
+#endif
 #include "qdjvuwidget.h"
 #include "qdjvu.h"
 
@@ -399,8 +420,8 @@ QDjViewDjVuExporter::save(QString fname)
                                "Do you want to continue and risk "
                                "overwriting files in this directory?"
                                "</html>"),
-                            tr("Con&tinue"),
-                            tr("&Cancel") ) )
+                            QMessageBox::Yes | QMessageBox::Cancel,
+                            QMessageBox::Cancel) != QMessageBox::Yes )
     return false;
   toPage = qBound(0, toPage, pagenum-1);
   fromPage = qBound(0, fromPage, pagenum-1);
@@ -423,7 +444,7 @@ QDjViewDjVuExporter::save(QString fname)
   file.setFileName(fname);
   file.remove();
   if (file.open(QIODevice::WriteOnly))
-    output = ::fdopen(wdup(file.handle()), "wb");
+    output = djv_fdopen(wdup(file.handle()), "wb");
   if (! output)
     {
       failed = true;
@@ -842,7 +863,7 @@ QDjViewPSExporter::openFile()
     {
       file.remove();
       if (file.open(QIODevice::WriteOnly))
-        output = ::fdopen(wdup(file.handle()), "wb");
+        output = djv_fdopen(wdup(file.handle()), "wb");
     }
   else if (printer)
     {
@@ -950,10 +971,10 @@ QDjViewPSExporter::openFile()
 #else
               int nfd = 256;
 #endif
-              ::close(0);
+              djv_close(0);
               int status = ::dup(fds[0]);
               for (int i=1; i<nfd; i++)
-                ::close(i);
+                djv_close(i);
               if (status >= 0 && fork() == 0)
                 {
                   // try lp and lpr
@@ -971,9 +992,9 @@ QDjViewPSExporter::openFile()
               ::_exit(0);
               ::exit(0);
             }
-          ::close(fds[0]);
+          djv_close(fds[0]);
           outputfd = fds[1];
-          output = fdopen(outputfd, "wb");
+          output = djv_fdopen(outputfd, "wb");
           if (pid >= 0)
             {
 # if HAVE_WAITPID
@@ -996,7 +1017,7 @@ QDjViewPSExporter::closeFile()
   if (output)
     ::fclose(output);
   if (outputfd >= 0)
-    ::close(outputfd);
+    djv_close(outputfd);
   if (file.openMode())
     file.close();
   output = 0;
@@ -1754,7 +1775,7 @@ QDjViewPdfExporter::doFinal()
   if (file.open(QIODevice::ReadOnly))
     input = TIFFFdOpen(wdup(file.handle()), inameArray.data(), "r");
   if (pdfFile.open(QIODevice::WriteOnly))
-    output = ::fdopen(wdup(pdfFile.handle()),"wb");
+    output = djv_fdopen(wdup(pdfFile.handle()),"wb");
   if (input && output)
     {
       const char *argv[3];
@@ -1945,7 +1966,7 @@ QDjViewImgExporter::doPage()
               .arg(QString::fromLocal8Bit(format).toUpper());
 #if HAVE_STRERROR
           if (file.error() == QFile::OpenError && errno > 0)
-            message = strerror(errno);
+            message = systemErrorString(errno);
 #endif
         }
     }

@@ -60,6 +60,14 @@
 # include <fcntl.h>
 #endif
 
+#ifdef Q_OS_WIN32
+# define djv_write _write
+# define djv_read _read
+#else
+# define djv_write write
+# define djv_read read
+#endif
+
 #if QT_VERSION < 0x50000
 # if defined(Q_WS_X11)
 #  include <QX11Info>
@@ -723,7 +731,7 @@ QDjViewPlugin::write(int fd, const char *ptr, int size)
   while(size>0)
     {
       errno = 0;
-      int res = ::write(fd, ptr, size);
+      int res = ::djv_write(fd, ptr, size);
       if (res<0 && errno==EINTR) 
         continue;
       if (res<=0) 
@@ -740,7 +748,7 @@ QDjViewPlugin::read(int fd, char *buffer, int size)
   while(size>0)
     {
       errno = 0;
-      int res = ::read(fd, ptr, size);
+      int res = ::djv_read(fd, ptr, size);
       if (res<0 && errno==EINTR)
         continue;
       if (res <= 0) 
@@ -1451,8 +1459,8 @@ QDjViewPlugin::exec()
 {
 #ifdef Q_OS_UNIX
  #ifndef QT_NO_DEBUG
-  const char *s = ::getenv("DJVIEW_DEBUG");
-  if (s && strcmp(s,"0"))
+  QByteArray s = qgetenv("DJVIEW_DEBUG");
+  if (!s.isEmpty() && s != "0")
     {
       static int loop = 1;
       qWarning("QDjViewPlugin::exec() looping for gdb");

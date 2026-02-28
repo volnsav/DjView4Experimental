@@ -68,6 +68,7 @@
 #include <QMessageBox>
 #include <QObject>
 #include <QPainter>
+#include <QStyle>
 #include <QPrinter>
 #include <QPrintDialog>
 #include <QPrintEngine>
@@ -167,11 +168,21 @@ QDjViewErrorDialog::error(QString msg, QString, int)
   qWarning("%s", msga.constData());
 }
 
-void 
+void
 QDjViewErrorDialog::prepare(QMessageBox::Icon icon, QString caption)
 {
   if (icon != QMessageBox::NoIcon)
-    d->ui.iconLabel->setPixmap(QMessageBox::standardIcon(icon));
+    {
+      QStyle::StandardPixmap sp = QStyle::SP_MessageBoxInformation;
+      switch (icon)
+        {
+        case QMessageBox::Question: sp = QStyle::SP_MessageBoxQuestion; break;
+        case QMessageBox::Warning: sp = QStyle::SP_MessageBoxWarning; break;
+        case QMessageBox::Critical: sp = QStyle::SP_MessageBoxCritical; break;
+        default: break;
+        }
+      d->ui.iconLabel->setPixmap(style()->standardIcon(sp).pixmap(32, 32));
+    }
   if (caption.isEmpty())
     caption = tr("Error - DjView", "dialog caption");
   setWindowTitle(caption);
@@ -1061,12 +1072,12 @@ QDjViewSaveDialog::start()
                                    "is not allowed!" ) );
           return;
         }
-      if ( QMessageBox::question(this, 
-                                 tr("Question - DjView", "dialog caption"),
-                                 tr("A file with this name already exists.\n"
-                                    "Do you want to replace it?"),
-                                 tr("&Replace"),
-                                 tr("&Cancel") ))
+      if (QMessageBox::question(this,
+                                tr("Question - DjView", "dialog caption"),
+                                tr("A file with this name already exists.\n"
+                                   "Do you want to replace it?"),
+                                QMessageBox::Yes | QMessageBox::Cancel,
+                                QMessageBox::Cancel) != QMessageBox::Yes)
         return;
     }
   QDjViewExporter *exporter = d->exporter;
@@ -1407,12 +1418,12 @@ QDjViewExportDialog::start()
                                    "is not allowed!" ) );
           return;
         }
-      if ( QMessageBox::question(this, 
-                                 tr("Question - DjView", "dialog caption"),
-                                 tr("A file with this name already exists.\n"
-                                    "Do you want to replace it?"),
-                                 tr("&Replace"),
-                                 tr("&Cancel") ))
+      if (QMessageBox::question(this,
+                                tr("Question - DjView", "dialog caption"),
+                                tr("A file with this name already exists.\n"
+                                   "Do you want to replace it?"),
+                                QMessageBox::Yes | QMessageBox::Cancel,
+                                QMessageBox::Cancel) != QMessageBox::Yes)
         return;
     }
   QDjViewExporter *exporter = d->exporter;
@@ -1841,12 +1852,12 @@ QDjViewPrintDialog::start()
           QString fname = d->ui.fileNameEdit->text();
           QFileInfo info(fname);
           if (info.exists() &&
-              QMessageBox::question(this, 
+              QMessageBox::question(this,
                                     tr("Question - DjView", "dialog caption"),
                                     tr("A file with this name already exists.\n"
                                        "Do you want to replace it?"),
-                                    tr("&Replace"),
-                                    tr("&Cancel") ))
+                                    QMessageBox::Yes | QMessageBox::Cancel,
+                                    QMessageBox::Cancel) != QMessageBox::Yes)
             return;
           // save preferences
           QDjViewPrefs *prefs = QDjViewPrefs::instance();

@@ -118,6 +118,7 @@ call :resolve_git_ref "%DJVU_ROOT%" LIB_GIT_REF
 )
 
 rem djview pre-build already triggers libdjvulibre build from DjVuLibreExperimental.
+call :prepare_cbt_stamps "%ROOT%src\release" || exit /b 1
 "%MSBUILD%" "%ROOT%src\djview.vcxproj" /m /p:Configuration=Release /p:Platform=x64 /p:TrackFileAccess=false
 if errorlevel 1 exit /b 1
 
@@ -137,6 +138,8 @@ for %%F in (
   Qt6Core.dll
   Qt6Gui.dll
   Qt6Network.dll
+  Qt6OpenGL.dll
+  Qt6OpenGLWidgets.dll
   Qt6PrintSupport.dll
   Qt6Widgets.dll
   icudt78.dll
@@ -179,6 +182,24 @@ if exist "%QT_TRANSLATIONS_DIR%" (
 
 echo.
 echo Combined runtime is ready in: %OUTDIR%
+exit /b 0
+
+:prepare_cbt_stamps
+set "CBT_DIR=%~1"
+if not exist "%CBT_DIR%" mkdir "%CBT_DIR%" || exit /b 1
+for %%F in (
+  moc_predefs.h.cbt
+  qdjview.moc.cbt
+  qdjviewexporters.moc.cbt
+  qdjviewplugin.moc.cbt
+  qdjviewprefs.moc.cbt
+  qdjviewsidebar.moc.cbt
+  qdjvu.moc.cbt
+  qdjvunet.moc.cbt
+  qdjvuwidget.moc.cbt
+) do (
+  if not exist "%CBT_DIR%\%%F" type nul > "%CBT_DIR%\%%F"
+)
 exit /b 0
 
 :resolve_git_ref

@@ -138,11 +138,6 @@ QDjViewApplication::QDjViewApplication(int &argc, char **argv)
   qt_mac_set_native_menubar(false);
 #endif
   
-  // Enable highdpi pixmaps
-#if QT_VERSION >= 0x50200
-  setAttribute(Qt::AA_UseHighDpiPixmaps, true);
-#endif
-  
   // Wire session management signals
   connect(this, SIGNAL(saveStateRequest(QSessionManager&)),
           this, SLOT(saveSessionState(QSessionManager&)) );
@@ -214,7 +209,7 @@ QDjViewApplication::getTranslationDirs()
       addDirectory(dirs, dirPath + "/../../share/djview4");
       addDirectory(dirs, "/usr/share/djvu/djview4");
       addDirectory(dirs, "/usr/share/djview4");
-      addDirectory(dirs, QLibraryInfo::location(QLibraryInfo::TranslationsPath));
+      addDirectory(dirs, QLibraryInfo::path(QLibraryInfo::TranslationsPath));
       translationDirs = dirs;
     }
   return translationDirs;
@@ -260,14 +255,14 @@ QDjViewApplication::getTranslationLangs()
     {
       QStringList langs; 
       addLang(langs, QSettings().value("language").toString());
-      QString varLanguage = QString::fromLocal8Bit(::getenv("LANGUAGE"));
+      QString varLanguage = qEnvironmentVariable("LANGUAGE");
       foreach(QString lang, varLanguage.split(":"))
         if (! lang.isEmpty())
           addLang(langs, lang);
 #ifdef LC_MESSAGES
       addLang(langs, QString::fromLocal8Bit(::setlocale(LC_MESSAGES, 0)));
 #endif
-      addLang(langs, QString::fromLocal8Bit(::getenv("LANG")));
+      addLang(langs, qEnvironmentVariable("LANG"));
 #ifdef Q_OS_DARWIN
       QSettings g(".", "globalPreferences");
       foreach (QString lang, g.value("AppleLanguages").toStringList())
@@ -437,8 +432,8 @@ main(int argc, char *argv[])
 
   // Set verbose flag as early as possible
 #ifdef Q_OS_UNIX
-  const char *s = ::getenv("DJVIEW_VERBOSE");
-  if (s && strcmp(s,"0"))
+  QByteArray s = qgetenv("DJVIEW_VERBOSE");
+  if (!s.isEmpty() && s != "0")
     verbose = true;
 #endif
   for (int i=1; i<argc; i++)
