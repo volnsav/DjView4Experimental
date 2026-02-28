@@ -106,6 +106,8 @@ QDjViewOutline::QDjViewOutline(QDjView *djview)
 
   connect(tree, SIGNAL(itemActivated(QTreeWidgetItem*, int)),
           this, SLOT(itemActivated(QTreeWidgetItem*)) );
+  connect(tree, SIGNAL(itemClicked(QTreeWidgetItem*, int)),
+          this, SLOT(itemActivated(QTreeWidgetItem*)) );
   connect(djview, SIGNAL(documentClosed(QDjVuDocument*)),
           this, SLOT(clear()) );
   connect(djview, SIGNAL(documentOpened(QDjVuDocument*)),
@@ -716,6 +718,8 @@ QDjViewThumbnails::QDjViewThumbnails(QDjView *djview)
   
   connect(djview->getDjVuWidget(), SIGNAL(pageChanged(int)),
           this, SLOT(pageChanged(int)) );
+  connect(view, SIGNAL(clicked(const QModelIndex&)),
+          this, SLOT(activated(const QModelIndex&)) );
   connect(view, SIGNAL(activated(const QModelIndex&)),
           this, SLOT(activated(const QModelIndex&)) );
   
@@ -1216,8 +1220,14 @@ miniexp_get_text(miniexp_t exp, QString &result,
 }
 
 
+static inline bool
+is_word_char(QChar c)
+{
+  return c.isLetterOrNumber() || c == QChar('_');
+}
+
 static QList<QList<miniexp_t> >
-miniexp_search_text(miniexp_t exp, QRegExp regex)
+miniexp_search_text(miniexp_t exp, QRegExp regex, bool wordOnly)
 {
   QList<QList<miniexp_t> > hits;
   QString text;
@@ -1233,19 +1243,28 @@ miniexp_search_text(miniexp_t exp, QRegExp regex)
     {
       QList<miniexp_t> hit;
       int endmatch = match + regex.matchedLength();
-      offset += 1;
+      int nextOffset = match + regex.matchedLength();
+      if (nextOffset <= match)
+        nextOffset = match + 1;
       if (endmatch <= match)
         continue;
+      if (wordOnly)
+        {
+          bool leftOk = (match <= 0) || !is_word_char(text.at(match-1));
+          bool rightOk = (endmatch >= text.size()) || !is_word_char(text.at(endmatch));
+          if (! (leftOk && rightOk))
+            {
+              offset = nextOffset;
+              continue;
+            }
+        }
       QMap<int,miniexp_t>::const_iterator pos = positions.lowerBound(match);
       while (pos != positions.begin() && pos.key() > match)
         --pos;
       for (; pos != positions.end() && pos.key() < endmatch; ++pos)
         hit += pos.value();
       hits += hit;
-      if (pos != positions.end())
-        offset = pos.key();
-      else
-        break;
+      offset = nextOffset;
     }
   return hits;
 }
@@ -1352,8 +1371,10 @@ void
 QDjViewFind::Model::workTimeout()
 {
   // do some work
+  int restartDelay = 0;
   int startingPoint = curWork;
   bool somePagesWithText = false;
+  bool somePagesPending = false;
   doPending();
   while (working)
     {
@@ -1369,32 +1390,32 @@ QDjViewFind::Model::workTimeout()
           if (exp == miniexp_dummy)
             {
               // data not present
+              somePagesPending = true;
               if (pending)
                 djview->statusMessage(tr("Searching page %1 (waiting for data.)")
                                       .arg(name) );
               if (pending || widget->isVisible())
-                doc->getPageText(curWork, true);                
-              // timer will be reactivated by pageinfo()
-              return;
+                doc->getPageText(curWork, true);
             }
-          Hits pageHits;
-          hits[curWork] = pageHits;
-          if (exp != miniexp_nil)
+          else
             {
-              somePagesWithText = true;
-              if (pending)
-                djview->statusMessage(tr("Searching page %1.").arg(name));
-              pageHits = miniexp_search_text(exp, find);
+              Hits pageHits;
               hits[curWork] = pageHits;
-              if (pageHits.size() > 0)
+              if (exp != miniexp_nil)
                 {
-                  modelAdd(curWork, pageHits.size());
-                  doHighlights(curWork);
-                  doPending();
-                  makeSelectionVisible();
+                  somePagesWithText = true;
+                  if (pending)
+                    djview->statusMessage(tr("Searching page %1.").arg(name));
+                  pageHits = miniexp_search_text(exp, find, wordOnly);
+                  hits[curWork] = pageHits;
+                  if (pageHits.size() > 0)
+                    {
+                      modelAdd(curWork, pageHits.size());
+                      doHighlights(curWork);
+                      doPending();
+                      makeSelectionVisible();
+                    }
                 }
-              // enough
-              break;
             }
         }
       // next page
@@ -1414,6 +1435,11 @@ QDjViewFind::Model::workTimeout()
       // finished?
       if (curWork == startingPoint)
         {
+          if (somePagesPending)
+            {
+              restartDelay = 100;
+              break;
+            }
           stopFind();
           djview->statusMessage(QString());
           if (! pages.size())
@@ -1438,7 +1464,7 @@ QDjViewFind::Model::workTimeout()
     }
   // restart timer
   if (working)
-    workTimer->start(0);
+    workTimer->start(restartDelay);
 }
 
 
@@ -1560,8 +1586,6 @@ QDjViewFind::Model::textChanged()
           s = QRegExp::escape(widget->text());
           s.replace(QRegExp("\\s+"), " ");
         }
-      if (wordOnly)
-        s = "\\b" + s;
       find = QRegExp(s);
       if (caseSensitive)
         find.setCaseSensitivity(Qt::CaseSensitive);
@@ -1679,6 +1703,8 @@ QDjViewFind::QDjViewFind(QDjView *djview)
           model, SLOT(documentClosed(QDjVuDocument*)) );
   connect(djview, SIGNAL(documentReady(QDjVuDocument*)),
           model, SLOT(documentReady(QDjVuDocument*)) );
+  connect(view, SIGNAL(clicked(const QModelIndex&)),
+          model, SLOT(itemActivated(const QModelIndex&)));
   connect(view, SIGNAL(activated(const QModelIndex&)),
           model, SLOT(itemActivated(const QModelIndex&)));
   connect(djview->getDjVuWidget(), SIGNAL(pageChanged(int)),
