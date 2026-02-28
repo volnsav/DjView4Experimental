@@ -224,11 +224,25 @@ QDjViewApplication::getTranslationDirs()
 static void
 addLang(QStringList &langs, QString s)
 {
+  s = s.trimmed();
+  int p = s.indexOf('.');
+  if (p > 0)
+    s = s.left(p);
+  p = s.indexOf('@');
+  if (p > 0)
+    s = s.left(p);
   if (s.size() > 0)
     {
       s = s.replace(QChar('-'), QChar('_'));
       if (! langs.contains(s))
         langs << s;
+      int us = s.indexOf('_');
+      if (us > 0)
+        {
+          QString base = s.left(us);
+          if (! base.isEmpty() && !langs.contains(base))
+            langs << base;
+        }
 #ifdef Q_OS_DARWIN
       if (s == "zh_Hans" && ! langs.contains("zh_CN"))
         langs << "zh_CN";

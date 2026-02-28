@@ -30,7 +30,7 @@
         <location filename="qdjview.cpp" line="212"/>
         <source>FitPage</source>
         <comment>zoomCombo</comment>
-        <translation>Підібрати висоту</translation>
+        <translation>Підібрати сторінку</translation>
     </message>
     <message>
         <location filename="qdjview.cpp" line="213"/>
@@ -838,7 +838,7 @@ Filename &apos;%1&apos; has no suffix.</source>
         <location filename="qdjview.cpp" line="539"/>
         <source>Fit &amp;Page</source>
         <comment>Zoom|</comment>
-        <translation>Підібрати за &amp;висотою</translation>
+        <translation>Підібрати за &amp;сторінкою</translation>
     </message>
     <message>
         <location filename="qdjview.cpp" line="545"/>
@@ -1133,7 +1133,7 @@ Filename &apos;%1&apos; has no suffix.</source>
     <message>
         <location filename="qdjview.cpp" line="2545"/>
         <source>Outline</source>
-        <translation>Ескіз</translation>
+        <translation>Зміст</translation>
     </message>
     <message>
         <location filename="qdjview.cpp" line="2552"/>
@@ -1233,7 +1233,7 @@ Filename &apos;%1&apos; has no suffix.</source>
     <message>
         <location filename="qdjview.cpp" line="463"/>
         <source>Open a remote DjVu document.</source>
-        <translation>Відкрити нелокальний документ DjVu.</translation>
+        <translation>Відкрити віддалений документ DjVu.</translation>
     </message>
     <message>
         <location filename="qdjview.cpp" line="504"/>
@@ -2078,12 +2078,12 @@ Do you want to replace it?</source>
     <message>
         <location filename="qdjviewsidebar.cpp" line="1687"/>
         <source>&lt;html&gt;&lt;b&gt;Finding text.&lt;/b&gt;&lt;br/&gt; Search hits appear progressively as soon as you type a search string. Typing enter jumps to the next hit. To move to the previous or next hit, you can also use the arrow buttons or the shortcuts &lt;tt&gt;F3&lt;/tt&gt; or &lt;tt&gt;Shift-F3&lt;/tt&gt;. You can also double click a page name. Use the &lt;tt&gt;Options&lt;/tt&gt; menu to search words only or to specify the case sensitivity.&lt;/html&gt;</source>
-        <translation>&lt;html&gt;&lt;b&gt;Пошук тексту.&lt;/b&gt;&lt;br/&gt; Під час пошуку відповідники з&apos;являються поступово, паралельно з введенням вами рядка для пошуку. Натиснення клавіші вводу задає перехід до наступного відповідника. Щоб перейти до попереднього чи наступного відповідника, Ви також можете використовувати стрілки та гарячі клавіші &lt;tt&gt;F3&lt;/tt&gt; або &lt;tt&gt;Shift-F3&lt;/tt&gt;. Також можна двічі клацнути на назві сторінки. Щоб шукати лише цілі слова або задати чутливість до регістру, скористайтеся меню &lt;tt&gt;Параметри&lt;/tt&gt;, &lt;/html&gt;</translation>
+        <translation>&lt;html&gt;&lt;b&gt;Пошук тексту.&lt;/b&gt;&lt;br/&gt; Під час пошуку відповідники з&apos;являються поступово, паралельно з введенням вами рядка для пошуку. Натиснення клавіші вводу задає перехід до наступного відповідника. Щоб перейти до попереднього чи наступного відповідника, ви також можете використовувати стрілки та гарячі клавіші &lt;tt&gt;F3&lt;/tt&gt; або &lt;tt&gt;Shift-F3&lt;/tt&gt;. Також можна клацнути на назві сторінки. Щоб шукати лише цілі слова або задати чутливість до регістру, скористайтеся меню &lt;tt&gt;Параметри&lt;/tt&gt;.&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="qdjviewsidebar.cpp" line="1606"/>
         <source>Regular expression</source>
-        <translation>Формальний вираз</translation>
+        <translation>Регулярний вираз</translation>
     </message>
     <message>
         <location filename="qdjviewsidebar.cpp" line="1636"/>
@@ -2307,7 +2307,7 @@ Do you want to replace it?</source>
     <message>
         <location filename="qdjviewdialogs.cpp" line="530"/>
         <source>Bundled DjVu document</source>
-        <translation>З&apos;єднаний документ DjVu</translation>
+        <translation>Збірний документ DjVu</translation>
     </message>
     <message>
         <location filename="qdjviewdialogs.cpp" line="532"/>
@@ -2317,7 +2317,7 @@ Do you want to replace it?</source>
     <message>
         <location filename="qdjviewdialogs.cpp" line="534"/>
         <source>Obsolete bundled DjVu document</source>
-        <translation>Застарілий з&apos;єднаний документ DjVu</translation>
+        <translation>Застарілий збірний документ DjVu</translation>
     </message>
     <message>
         <location filename="qdjviewdialogs.cpp" line="536"/>
@@ -2438,12 +2438,12 @@ Do you want to replace it?</source>
     <message>
         <location filename="qdjviewsidebar.cpp" line="115"/>
         <source>&lt;html&gt;&lt;b&gt;Document outline.&lt;/b&gt;&lt;br/&gt; This panel display the document outline, or the page names when the outline is not available, Double-click any entry to jump to the selected page.&lt;/html&gt;</source>
-        <translation>&lt;html&gt;&lt;b&gt;Ескіз документа.&lt;/b&gt;&lt;br/&gt; Ця панель показує ескіз документа або назви сторінок, коли ескіз недоступний. Двічі клацніть по будь-якому пункту для переходу до обраної сторінки.&lt;/html&gt;</translation>
+        <translation>&lt;html&gt;&lt;b&gt;Зміст документа.&lt;/b&gt;&lt;br/&gt; Ця панель показує структуру документа (закладки), а якщо її немає - назви сторінок. Клацніть будь-який пункт для переходу до обраної сторінки.&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="qdjviewsidebar.cpp" line="148"/>
         <source>Outline data is corrupted</source>
-        <translation>Дані ескізу зіпсовано</translation>
+        <translation>Дані змісту пошкоджено</translation>
     </message>
     <message>
         <location filename="qdjviewsidebar.cpp" line="165"/>
@@ -2928,7 +2928,7 @@ Do you want to replace it?</source>
     <message>
         <location filename="qdjviewprefs.cpp" line="892"/>
         <source>&lt;html&gt;&lt;b&gt;Network proxy settings.&lt;/b&gt;&lt;br&gt;These proxy settings are used when the standalone djview viewer accesses a djvu document through a http url. The djview plugin always uses the proxy settings of the web browser.&lt;p&gt;&lt;b&gt;Cache settings.&lt;/b&gt;&lt;br&gt;The &lt;i&gt;pixel cache&lt;/i&gt; stores image data located outside the visible area. This cache makes panning smoother. The &lt;i&gt;decoded page cache&lt;/i&gt; contains partially decoded pages. It provides faster response times when navigating a multipage document or when returning to a previously viewed page. Clearing this cache might be useful to reflect a change in the page data without restarting the DjVu viewer.&lt;/html&gt;</source>
-        <translation>&lt;html&gt;&lt;b&gt;Налаштування проксі сервера.&lt;/b&gt;&lt;br&gt;Ці налаштування проксі сервера буде використано, коли самодостатній переглядач djview намагатиметься отримати доступ до документа djvu через адресу http.&lt;p&gt;&lt;b&gt;Параметри кешування.&lt;/b&gt;&lt;br&gt; &lt;i&gt;Кеш пікселів&lt;/i&gt; зберігає дані зображень, розташованих поза видимою областю. Цей кеш робить пересування документом плавнішим. &lt;i&gt;Кеш розкодованих сторінок&lt;/i&gt; мстить частково розкодовані сторінки. Він забезпечує швидшу реакцію переглядача під час пересування багатосторінковим документом або під час повернення для раніше переглянутої сторінки. Спорожнення цього кешу може бути корисним для показу змін у даних сторінки без перезапуску переглядача DjVu.&lt;/html&gt;</translation>
+        <translation>&lt;html&gt;&lt;b&gt;Налаштування проксі сервера.&lt;/b&gt;&lt;br&gt;Ці налаштування проксі сервера буде використано, коли окремий переглядач djview намагатиметься отримати доступ до документа djvu через адресу http.&lt;p&gt;&lt;b&gt;Параметри кешування.&lt;/b&gt;&lt;br&gt; &lt;i&gt;Кеш пікселів&lt;/i&gt; зберігає дані зображень, розташованих поза видимою областю. Цей кеш робить пересування документом плавнішим. &lt;i&gt;Кеш розкодованих сторінок&lt;/i&gt; містить частково розкодовані сторінки. Він забезпечує швидшу реакцію переглядача під час пересування багатосторінковим документом або під час повернення до раніше переглянутої сторінки. Спорожнення цього кешу може бути корисним для показу змін у даних сторінки без перезапуску переглядача DjVu.&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="qdjviewprefs.cpp" line="950"/>
@@ -3259,7 +3259,7 @@ Do you want to replace it?</source>
     <message>
         <location filename="qdjviewsavedialog.ui" line="142"/>
         <source>Bundled DjVu Document</source>
-        <translation>Зв&apos;язаний документ DjVu</translation>
+        <translation>Збірний документ DjVu</translation>
     </message>
     <message>
         <location filename="qdjviewsavedialog.ui" line="147"/>
@@ -3311,7 +3311,7 @@ Do you want to replace it?</source>
     <message>
         <location filename="qdjviewsidebar.cpp" line="740"/>
         <source>&lt;html&gt;&lt;b&gt;Document thumbnails.&lt;/b&gt;&lt;br/&gt; This panel display thumbnails for the document pages. Double click a thumbnail to jump to the selected page. %1 to change the thumbnail size or the refresh mode. The smart refresh mode only computes thumbnails when the page data is present (displayed or cached.)&lt;/html&gt;</source>
-        <translation>&lt;html&gt;&lt;b&gt;Мініатюри документа.&lt;/b&gt;&lt;br/&gt; На цій панелі показано мініатюри сторінок документа. Подвійне клацання на мініатюрі відкриє у вікні перегляду відповідну сторінку. %1 надасть змогу змінити розмір мініатюр або оновить їх. У режимі розумного оновлення програма створюватиме мініатюри тільки у разі доступності даних сторінки (відображених або кешованих.)&lt;/html&gt;</translation>
+        <translation>&lt;html&gt;&lt;b&gt;Мініатюри документа.&lt;/b&gt;&lt;br/&gt; На цій панелі показано мініатюри сторінок документа. Клацання на мініатюрі відкриє у вікні перегляду відповідну сторінку. %1 надасть змогу змінити розмір мініатюр або оновити їх. У режимі розумного оновлення програма створюватиме мініатюри тільки у разі доступності даних сторінки (відображених або кешованих).&lt;/html&gt;</translation>
     </message>
     <message>
         <location filename="qdjviewsidebar.cpp" line="708"/>
