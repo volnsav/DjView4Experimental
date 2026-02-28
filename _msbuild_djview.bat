@@ -5,6 +5,7 @@ rem Optional overrides:
 rem   VCVARS     - full path to vcvars64.bat
 rem   VCVARS_VER - optional vcvars toolset version
 rem   MSBUILD    - full path to MSBuild.exe
+rem   MSBUILD_MAXCPU - optional max parallel nodes for MSBuild (/m:N)
 rem   VCPKG_ROOT - path to vcpkg root (for lrelease)
 rem   VCPKG_TRIPLET - vcpkg triplet (default: x64-windows)
 rem   DJVU_ROOT  - path to DjVuLibreExperimental root
@@ -12,9 +13,12 @@ rem   DJVU_ROOT  - path to DjVuLibreExperimental root
 set "ROOT=%~dp0"
 set "ROOT_DIR=%ROOT%"
 if "%ROOT_DIR:~-1%"=="\" set "ROOT_DIR=%ROOT_DIR:~0,-1%"
+if not exist "%ROOT%build" mkdir "%ROOT%build" || exit /b 1
 if not defined VCPKG_TRIPLET set "VCPKG_TRIPLET=x64-windows"
 if not defined DJVU_ROOT set "DJVU_ROOT=%ROOT%..\DjVuLibreExperimental"
 for %%I in ("%DJVU_ROOT%") do set "DJVU_ROOT=%%~fI"
+set "MSBUILD_PARALLEL=/m"
+if defined MSBUILD_MAXCPU set "MSBUILD_PARALLEL=/m:%MSBUILD_MAXCPU%"
 
 if not defined VCVARS (
   for /d %%D in ("C:\Program Files\Microsoft Visual Studio\*") do (
@@ -72,7 +76,7 @@ call :resolve_git_ref "%DJVU_ROOT%" LIB_GIT_REF
 )
 
 call :prepare_cbt_stamps "%ROOT%src\release" || exit /b 1
-"%MSBUILD%" "%ROOT%src\djview.vcxproj" /m /p:Configuration=Release /p:Platform=x64 /p:TrackFileAccess=false
+"%MSBUILD%" "%ROOT%src\djview.vcxproj" %MSBUILD_PARALLEL% /p:Configuration=Release /p:Platform=x64 /p:TrackFileAccess=false
 if errorlevel 1 exit /b %errorlevel%
 
 if defined VCPKG_ROOT (
