@@ -22,7 +22,6 @@
 #include <QApplication>
 #include <QByteArray>
 #include <QDebug>
-#include <QDesktopWidget>
 #include <QEvent>
 #include <QEventLoop>
 #include <QHBoxLayout>
@@ -214,7 +213,7 @@ public:
 
 struct my_event_filter_t : public QAbstractNativeEventFilter
 {
-  virtual bool nativeEventFilter(const QByteArray &type, void *msg, long*);
+  virtual bool nativeEventFilter(const QByteArray &type, void *msg, qintptr*) override;
   QMap<quint32,QDjViewPlugin::Instance*> instances;
   QMap<quint32,my_timer_object_t*> timers;
   static my_event_filter_t *instance() {
@@ -222,7 +221,7 @@ struct my_event_filter_t : public QAbstractNativeEventFilter
     return filter ? filter : filter = new my_event_filter_t; }
 };
 
-bool my_event_filter_t::nativeEventFilter(const QByteArray &type, void *msg, long*)
+bool my_event_filter_t::nativeEventFilter(const QByteArray &type, void *msg, qintptr*)
 {
   if (type != "xcb_generic_event_t") return false;
   my_xcb_configure_notify_event_t *ev = (my_xcb_configure_notify_event_t*)msg;
@@ -1077,7 +1076,7 @@ QDjViewPlugin::cmdAttachWindow()
       if (shell && djview && shell != djview)
         {
           QLayout *layout = new QHBoxLayout(shell);
-          layout->setMargin(0);
+          layout->setContentsMargins(0, 0, 0, 0);
           layout->setSpacing(0);
           layout->addWidget(djview);
         }

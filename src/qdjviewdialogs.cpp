@@ -127,7 +127,7 @@ QDjViewErrorDialog::QDjViewErrorDialog(QWidget *parent)
     d(new Private)
 {
   d->ui.setupUi(this);
-  d->ui.textEdit->viewport()->setBackgroundRole(QPalette::Background);
+  d->ui.textEdit->viewport()->setBackgroundRole(QPalette::Base);
   setWindowTitle(tr("DjView Error"));
 }
 
@@ -293,7 +293,7 @@ QDjViewInfoDialog::QDjViewInfoDialog(QDjView *parent)
   font.setFamily("monospace");
   font.setPointSize((font.pointSize() * 5 + 5) / 6);
   d->ui.fileText->setFont(font);
-  d->ui.fileText->viewport()->setBackgroundRole(QPalette::Background);
+  d->ui.fileText->viewport()->setBackgroundRole(QPalette::Base);
   
   QStringList labels;
   d->ui.docTable->setColumnCount(6);
@@ -951,7 +951,6 @@ QDjViewSaveDialog::QDjViewSaveDialog(QDjView *djview)
   d->exporter = 0;
 
   d->ui.setupUi(this);
-  setAttribute(Qt::WA_GroupLeader, true);
 
   connect(d->ui.okButton, SIGNAL(clicked()), 
           this, SLOT(start()));
@@ -1232,7 +1231,6 @@ QDjViewExportDialog::QDjViewExportDialog(QDjView *djview)
   d->exporter = 0;
 
   d->ui.setupUi(this);
-  setAttribute(Qt::WA_GroupLeader, true);
 
   connect(d->ui.okButton, SIGNAL(clicked()), 
           this, SLOT(start()));
@@ -1584,7 +1582,6 @@ QDjViewPrintDialog::QDjViewPrintDialog(QDjView *djview)
   d->exporter = 0;
   d->printer = new QPrinter(QPrinter::HighResolution);
   d->ui.setupUi(this);
-  setAttribute(Qt::WA_GroupLeader, true);
   connect(d->ui.okButton, SIGNAL(clicked()), 
           this, SLOT(start()));
   connect(d->ui.stopButton, SIGNAL(clicked()), 
@@ -1755,11 +1752,11 @@ QDjViewPrintDialog::choose()
       d->exporter->savePrintSetup(d->printer);
       QPrintDialog *dialog = new QPrintDialog(d->printer, this);
       // options
-      QPrintDialog::PrintDialogOptions options = dialog->enabledOptions();
+      auto options = dialog->options();
       options |= QPrintDialog::PrintCollateCopies;
       options &= ~QPrintDialog::PrintToFile;
       options &= ~QPrintDialog::PrintSelection;
-      dialog->setEnabledOptions(options);
+      dialog->setOptions(options);
       // copy page spec
       int pagenum = d->djview->pageNum();
       int curpage = d->djview->getDjVuWidget()->page();
@@ -1960,5 +1957,3 @@ QDjViewPrintDialog::closeEvent(QCloseEvent *event)
    c++-font-lock-extra-types: ( "\\sw+_t" "[A-Z]\\sw*[a-z]\\sw*" )
    End:
    ------------------------------------------------------------- */
-
-

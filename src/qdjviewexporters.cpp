@@ -74,6 +74,7 @@
 #include <QPrinter>
 #include <QPrintDialog>
 #include <QPrintEngine>
+#include <QPageLayout>
 #include <QRegExp>
 #include <QSettings>
 #include <QSpinBox>
@@ -405,9 +406,9 @@ QDjViewDjVuExporter::save(QString fname)
   fromPage = qBound(0, fromPage, pagenum-1);
   QByteArray pagespec;
   if (fromPage == toPage && pagenum > 1)
-    pagespec.append(QString("--pages=%1").arg(fromPage+1));
+    pagespec.append(QString("--pages=%1").arg(fromPage+1).toUtf8());
   else if (fromPage != 0 || toPage != pagenum - 1)
-    pagespec.append(QString("--pages=%1-%2").arg(fromPage+1).arg(toPage+1));
+    pagespec.append(QString("--pages=%1-%2").arg(fromPage+1).arg(toPage+1).toUtf8());
   QByteArray namespec;
   if (indirect)
     namespec = "--indirect=" + fname.toUtf8();
@@ -743,7 +744,7 @@ bool
 QDjViewPSExporter::loadPrintSetup(QPrinter *printer, QPrintDialog *dialog)
 {
   bool grayscale = (printer->colorMode() == QPrinter::GrayScale);
-  bool landscape = (printer->orientation() == QPrinter::Landscape);
+  bool landscape = (printer->pageLayout().orientation() == QPageLayout::Landscape);
   ui1.grayScaleButton->setChecked(grayscale);  
   ui1.colorButton->setChecked(!grayscale);  
   ui2.landscapeButton->setChecked(landscape);
@@ -783,7 +784,7 @@ QDjViewPSExporter::savePrintSetup(QPrinter *printer)
   bool g = ui1.grayScaleButton->isChecked();
   bool l = ui2.landscapeButton->isChecked();
   printer->setColorMode(g ? QPrinter::GrayScale : QPrinter::Color);
-  printer->setOrientation(l ? QPrinter::Landscape : QPrinter::Portrait);
+  printer->setPageOrientation(l ? QPageLayout::Landscape : QPageLayout::Portrait);
   return true;
 }
 
@@ -2098,7 +2099,7 @@ bool
 QDjViewPrnExporter::loadPrintSetup(QPrinter *printer, QPrintDialog *)
 {
   bool grayscale = (printer->colorMode() == QPrinter::GrayScale);
-  bool landscape = (printer->orientation() == QPrinter::Landscape);
+  bool landscape = (printer->pageLayout().orientation() == QPageLayout::Landscape);
   ui.grayScaleButton->setChecked(grayscale);  
   ui.colorButton->setChecked(!grayscale);  
   ui.landscapeButton->setChecked(landscape);
@@ -2113,7 +2114,7 @@ QDjViewPrnExporter::savePrintSetup(QPrinter *printer)
   bool grayscale = ui.grayScaleButton->isChecked();
   bool landscape = ui.landscapeButton->isChecked();
   printer->setColorMode(grayscale ? QPrinter::GrayScale : QPrinter::Color);
-  printer->setOrientation(landscape ? QPrinter::Landscape : QPrinter::Portrait);
+  printer->setPageOrientation(landscape ? QPageLayout::Landscape : QPageLayout::Portrait);
   return true;
 }
 
@@ -2181,7 +2182,7 @@ QDjViewPrnExporter::doPage()
   rect.x = rect.y = 0;
   rect.w = ddjvu_page_get_width(*page);
   rect.h = ddjvu_page_get_height(*page);
-  QRect pageRect = printer->pageRect();
+  QRect pageRect = printer->pageLayout().paintRectPixels(printer->resolution());
   bool landscape = false;
   int prndpi = printer->resolution();
   int imgdpi = ddjvu_page_get_resolution(*page);

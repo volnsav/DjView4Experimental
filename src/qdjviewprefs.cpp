@@ -817,7 +817,6 @@ QDjViewPrefsDialog::QDjViewPrefsDialog()
   d->currentSaved = -1;
   
   // prepare ui
-  setAttribute(Qt::WA_GroupLeader, true);
   d->ui.setupUi(this);
   
   // connect buttons (some are connected in the ui file)

@@ -246,7 +246,7 @@ signals:
 };
 
 QDjVuDocumentPrivate::QDjVuDocumentPrivate()
-  : mutex(QMutex::Recursive),
+  : mutex(),
     autoDelete(false), 
     refCount(0),
     docReady(false), 

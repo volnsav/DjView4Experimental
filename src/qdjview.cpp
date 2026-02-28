@@ -2459,7 +2459,7 @@ QDjView::QDjView(QDjVuContext &context, ViewerMode mode, QWidget *parent)
   splash->setAlignment(Qt::AlignHCenter|Qt::AlignVCenter);
   splash->setPixmap(QPixmap(":/images/splash.png"));
   QPalette palette = splash->palette();
-  palette.setColor(QPalette::Background, Qt::white);
+  palette.setColor(QPalette::Window, Qt::white);
   splash->setPalette(palette);
   splash->setAutoFillBackground(true);
 
@@ -2856,7 +2856,7 @@ QDjView::reloadDocument()
       closeDocument();
       ddjvu_cache_clear(djvuContext);
       // Opening files more efficiently
-      QFileInfo file = url.toLocalFile();
+      QFileInfo file(url.toLocalFile());
       if (file.exists())
         {
           open(file.absoluteFilePath());
@@ -4751,7 +4751,7 @@ QDjView::openRecent()
   if (action && viewerMode >= STANDALONE)
     {
       QUrl url = action->data().toUrl();
-      QFileInfo file = url.toLocalFile();
+      QFileInfo file(url.toLocalFile());
       if (file.exists())
         open(file.absoluteFilePath());
       else

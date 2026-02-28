@@ -4991,13 +4991,13 @@ QDjVuWidget::modifierEvent(Qt::KeyboardModifiers modifiers,
           return; // Wait for the contextMenuEvent
         }
       else if (modifiers == Qt::NoModifier &&
-               buttons == Qt::MidButton )
+               buttons == Qt::MiddleButton )
         {
           viewport()->setCursor(Qt::CrossCursor);
           startSelecting(point);
         }
       else if (modifiers == Qt::ControlModifier &&
-               buttons == Qt::MidButton )
+               buttons == Qt::MiddleButton )
         {
           viewport()->setCursor(priv->cursHandClosed);
           startPanning(point);

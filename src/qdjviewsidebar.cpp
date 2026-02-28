@@ -100,7 +100,7 @@ QDjViewOutline::QDjViewOutline(QDjView *djview)
   tree->setSelectionMode(QAbstractItemView::SingleSelection);
   tree->setTextElideMode(Qt::ElideRight);
   QVBoxLayout *layout = new QVBoxLayout(this);
-  layout->setMargin(0);
+  layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
   layout->addWidget(tree);
 
@@ -406,7 +406,8 @@ QStyleOptionViewItem
 QDjViewThumbnails::View::viewOptions() const
 {
   int size = widget->model->getSize();
-  QStyleOptionViewItem opt = QListView::viewOptions();
+  QStyleOptionViewItem opt;
+  initViewItemOption(&opt);
   opt.decorationAlignment = Qt::AlignCenter;
   opt.decorationPosition = QStyleOptionViewItem::Top;
   opt.decorationSize = QSize(size, size);
@@ -709,7 +710,7 @@ QDjViewThumbnails::QDjViewThumbnails(QDjView *djview)
   view->setSelectionModel(selection);
 
   QVBoxLayout *layout = new QVBoxLayout(this);
-  layout->setMargin(0);
+  layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(0);
   layout->addWidget(view);
   

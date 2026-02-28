@@ -30,6 +30,7 @@
 #include <QPair>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 #include <QList>
 #include <QUrl>
 
@@ -63,7 +64,6 @@ class QShortcut;
 class QSettings;
 class QStackedLayout;
 class QStatusBar;
-class QStringList;
 class QTimer;
 class QTabWidget;
 class QToolBar;

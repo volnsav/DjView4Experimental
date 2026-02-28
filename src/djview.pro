@@ -18,7 +18,7 @@
 TEMPLATE = app 
 TARGET = djview
 CONFIG += qt thread warn_on 
-QT += network opengl
+QT += network
 
 # -- QT5 modules
 greaterThan(QT_MAJOR_VERSION, 4) {
@@ -65,6 +65,14 @@ macx {
 # --- windows stuff
 win32 {
   RC_FILE = djview.rc
+  DJVU_ROOT = $$clean_path($$PWD/../../../..)
+  INCLUDEPATH += $$DJVU_ROOT
+  contains(QMAKE_TARGET.arch, x86_64)|contains(QT_ARCH, x86_64)|contains(QT_ARCH, arm64) {
+    LIBS += -L$$DJVU_ROOT/win32/djvulibre/Release/x64
+  } else {
+    LIBS += -L$$DJVU_ROOT/win32/djvulibre/Release/x86
+  }
+  LIBS += -llibdjvulibre
 }
 
 # --- djviewplugin logic
