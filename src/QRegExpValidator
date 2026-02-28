@@ -1,0 +1,29 @@
+#ifndef DJVIEW_QREGEXPVALIDATOR_COMPAT_H
+#define DJVIEW_QREGEXPVALIDATOR_COMPAT_H
+
+#include <QRegularExpressionValidator>
+#include <QRegExp>
+
+class QRegExpValidator : public QRegularExpressionValidator
+{
+public:
+  explicit QRegExpValidator(QObject* parent = nullptr)
+    : QRegularExpressionValidator(parent)
+  {}
+
+  QRegExpValidator(const QRegExp& rx, QObject* parent = nullptr)
+    : QRegularExpressionValidator(static_cast<QRegularExpression>(rx), parent)
+  {}
+
+  void setRegExp(const QRegExp& rx)
+  {
+    setRegularExpression(static_cast<QRegularExpression>(rx));
+  }
+
+  QRegExp regExp() const
+  {
+    return QRegExp(regularExpression());
+  }
+};
+
+#endif

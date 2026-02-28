@@ -1,0 +1,142 @@
+#ifndef DJVIEW_QREGEXP_COMPAT_H
+#define DJVIEW_QREGEXP_COMPAT_H
+
+#include <QRegularExpression>
+#include <QString>
+#include <Qt>
+
+class QRegExp
+{
+public:
+  enum PatternSyntax {
+    RegExp,
+    Wildcard,
+    FixedString,
+    RegExp2,
+    W3CXmlSchema11
+  };
+
+  enum CaretMode {
+    CaretAtZero,
+    CaretAtOffset,
+    CaretWontMatch
+  };
+
+  QRegExp()
+    : m_regex()
+  {}
+
+  explicit QRegExp(const QString& pattern,
+                   Qt::CaseSensitivity cs = Qt::CaseSensitive,
+                   PatternSyntax = RegExp)
+    : m_regex(pattern, optionsFromCaseSensitivity(cs))
+  {}
+
+  explicit QRegExp(const QRegularExpression& regex)
+    : m_regex(regex)
+  {}
+
+  QRegExp(const QRegExp&) = default;
+  QRegExp& operator=(const QRegExp&) = default;
+
+  operator QRegularExpression() const
+  {
+    return m_regex;
+  }
+
+  bool isEmpty() const
+  {
+    return m_regex.pattern().isEmpty();
+  }
+
+  bool isValid() const
+  {
+    return m_regex.isValid();
+  }
+
+  QString pattern() const
+  {
+    return m_regex.pattern();
+  }
+
+  void setPattern(const QString& pattern)
+  {
+    m_regex.setPattern(pattern);
+    clearMatchState();
+  }
+
+  Qt::CaseSensitivity caseSensitivity() const
+  {
+    return (m_regex.patternOptions() & QRegularExpression::CaseInsensitiveOption)
+      ? Qt::CaseInsensitive
+      : Qt::CaseSensitive;
+  }
+
+  void setCaseSensitivity(Qt::CaseSensitivity cs)
+  {
+    auto options = m_regex.patternOptions();
+    options &= ~QRegularExpression::CaseInsensitiveOption;
+    options |= optionsFromCaseSensitivity(cs);
+    m_regex.setPatternOptions(options);
+    clearMatchState();
+  }
+
+  static QString escape(const QString& str)
+  {
+    return QRegularExpression::escape(str);
+  }
+
+  int indexIn(const QString& str, int offset = 0, CaretMode = CaretAtZero) const
+  {
+    m_lastMatch = m_regex.match(str, offset);
+    if (!m_lastMatch.hasMatch()) {
+      return -1;
+    }
+    return m_lastMatch.capturedStart(0);
+  }
+
+  int matchedLength() const
+  {
+    if (!m_lastMatch.hasMatch()) {
+      return -1;
+    }
+    return m_lastMatch.capturedLength(0);
+  }
+
+  QString cap(int nth = 0) const
+  {
+    if (!m_lastMatch.hasMatch()) {
+      return QString();
+    }
+    return m_lastMatch.captured(nth);
+  }
+
+  bool exactMatch(const QString& str) const
+  {
+    m_lastMatch = m_regex.match(str);
+    if (!m_lastMatch.hasMatch()) {
+      return false;
+    }
+    return m_lastMatch.capturedStart(0) == 0
+      && m_lastMatch.capturedLength(0) == str.size();
+  }
+
+private:
+  static QRegularExpression::PatternOptions optionsFromCaseSensitivity(Qt::CaseSensitivity cs)
+  {
+    return (cs == Qt::CaseInsensitive)
+      ? QRegularExpression::CaseInsensitiveOption
+      : QRegularExpression::NoPatternOption;
+  }
+
+  void clearMatchState() const
+  {
+    m_lastMatch = QRegularExpressionMatch();
+  }
+
+private:
+  QRegularExpression m_regex;
+  mutable QRegularExpressionMatch m_lastMatch;
+};
+
+#endif

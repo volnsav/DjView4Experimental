@@ -1,0 +1,40 @@
+DjView4Experimental x64 runtime dependencies (minimal verified set)
+Built/tested on: 2026-02-28
+
+[app]
+djview.exe
+
+[djvulibre build output]
+libdjvulibre.dll
+libjpeg.dll
+
+[qt/vcpkg bin]
+Qt6Core.dll
+Qt6Gui.dll
+Qt6Network.dll
+Qt6PrintSupport.dll
+Qt6Widgets.dll
+icudt78.dll
+icuin78.dll
+icuuc78.dll
+brotlicommon.dll
+brotlidec.dll
+bz2.dll
+double-conversion.dll
+freetype.dll
+harfbuzz.dll
+libcrypto-3-x64.dll
+libpng16.dll
+md4c.dll
+pcre2-16.dll
+zlib1.dll
+zstd.dll
+
+[qt plugin]
+platforms\qwindows.dll
+
+[verification mode]
+Start with clean PATH:
+  PATH=<runtime_dir>;C:\Windows\System32;C:\Windows
+Expected:
+  djview.exe starts successfully (process runs).
