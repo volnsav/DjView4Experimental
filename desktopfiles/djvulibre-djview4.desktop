@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Categories=Qt;Graphics;Viewer;
-MimeType=image/x-djvu;image/x.djvu;image/vnd.djvu;
+MimeType=image/x-djvu;image/x.djvu;image/vnd.djvu;image/vnd.djvu+multipage;image/vnd.djvu+singlepage
 Name=DjView4
 Exec=djview4 %f
 Terminal=false
@@ -75,3 +75,4 @@ Comment[ru]=Программа просмотра документов DjVu
 Comment[uk]=Переглядач документів DjVu
 Comment[zh_CN]=DjVu文档查看工具
 Comment[zh_TW]=DjVu文件檢視工具
+Keywords=DjVu;document;presentation;viewer;graphics;

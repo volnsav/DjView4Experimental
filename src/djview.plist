@@ -9,8 +9,6 @@
     <string>APPL</string>
     <key>CFBundleName</key>
     <string>DjView</string>
-    <key>CFBundleGetInfoString</key>
-    <string>DjView - viewer for DjVu files</string>
     <key>CFBundleSignature</key>
     <string>DJVU</string>
     <key>CFBundleExecutable</key>
@@ -51,7 +49,9 @@
         <true/>
 	<key>LSItemContentTypes</key>
 	<array>
+	  <string>org.djvuzone.djvulibre.djvu</string>
 	  <string>com.lizardtech.djvu</string>
+	  <string>public.djvu</string>
 	</array>
       </dict>
     </array>

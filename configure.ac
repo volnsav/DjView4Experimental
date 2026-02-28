@@ -20,7 +20,7 @@
 # ----------------------------------------
 
 m4_define([v_maj], [4])
-m4_define([v_min], [10.6])
+m4_define([v_min], [12])
 m4_define([v_ver], [v_maj.v_min])
 
 
@@ -164,6 +164,7 @@ AC_CHECK_HEADERS(unistd.h string.h strings.h getopt.h)
 # ----------------------------------------
 
 AC_FUNC_FORK
+AC_FUNC_FSEEKO
 AC_CHECK_FUNCS(sigaction strerror waitpid wait3)
 
 

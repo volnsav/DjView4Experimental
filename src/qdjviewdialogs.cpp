@@ -45,6 +45,7 @@
 #if HAVE_TIFF
 # include <tiffio.h>
 #endif
+#include <algorithm>
 
 #include <QApplication>
 #include <QClipboard>
@@ -83,7 +84,11 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QVector>
-#include <QtAlgorithms>
+#if QT_VERSION >= 0x50E00
+# define tr8 tr
+#else
+# define tr8 trUtf8 
+#endif
 
 #include <libdjvu/miniexp.h>
 #include <libdjvu/ddjvuapi.h>
@@ -94,6 +99,7 @@
 #include "qdjviewexporters.h"
 #include "qdjvuwidget.h"
 #include "qdjvu.h"
+
 
 
 
@@ -156,6 +162,9 @@ QDjViewErrorDialog::error(QString msg, QString, int)
   while (d->messages.size() >= 16)
     d->messages.removeLast();
   compose();
+  // For verbose mode
+  QByteArray msga = msg.toLocal8Bit();
+  qWarning("%s", msga.constData());
 }
 
 void 
@@ -280,6 +289,7 @@ QDjViewInfoDialog::QDjViewInfoDialog(QDjView *parent)
   
   QFont font = d->ui.fileText->font();
   font.setFixedPitch(true);
+  font.setStyleHint(QFont::Monospace);
   font.setFamily("monospace");
   font.setPointSize((font.pointSize() * 5 + 5) / 6);
   d->ui.fileText->setFont(font);
@@ -324,7 +334,7 @@ QDjViewInfoDialog::QDjViewInfoDialog(QDjView *parent)
   wd->setWhatsThis(tr("<html><b>Document information</b><br>"
                       "This panel shows information about the document and "
                       "its component files. Select a component file "
-                      "to display detailled information in the <tt>File</tt> "
+                      "to display detailed information in the <tt>File</tt> "
                       "tab. Double click a component file to show "
                       "the corresponding page in the main window. "
                       "</html>"));
@@ -499,7 +509,7 @@ QDjViewInfoDialog::fillFileCombo()
       if (info.type == 'P')
         {
           if (info.title && info.name && strcmp(info.title, info.name))
-            msg = trUtf8("Page #%1 - \302\253 %2 \302\273") // << .. >>
+            msg = tr8("Page #%1 - \302\253 %2 \302\273") // << .. >>
               .arg(info.pageno + 1).arg(QString::fromUtf8(info.title));
           else
             msg = tr("Page #%1").arg(info.pageno + 1);
@@ -768,10 +778,11 @@ metadataFill(QTableWidget *table, QMap<QString,QString> m)
   QMap<QString,QString>::const_iterator i = m.constBegin();
   for( ; i != m.constEnd(); i++)
     keys << i.key();
-  qSort(keys.begin(), keys.end());
+  std::sort(keys.begin(), keys.end());
   int nkeys = keys.size();
   table->setRowCount(nkeys);
   table->setSortingEnabled(false);
+  table->setWordWrap(false);
   for(int j = 0; j < nkeys; j++)
     {
       QTableWidgetItem *kitem = new QTableWidgetItem(keys[j]);
@@ -1471,7 +1482,7 @@ QDjViewExportDialog::browse()
 {
   QString fname = d->ui.fileNameEdit->text();
   QDjViewExporter *exporter = d->exporter;
-  QString format = (exporter) ? exporter->name() : QString::null;
+  QString format = (exporter) ? exporter->name() : QString();
   QStringList info = QDjViewExporter::info(format);
   QString filters = tr("All files", "save filter") + " (*)";
   QString suffix;
@@ -1601,7 +1612,7 @@ QDjViewPrintDialog::QDjViewPrintDialog(QDjView *djview)
                   "options.</html>"));
 
   // Load preferences
-  d->ui.printerLabel->setText(QString::null);
+  d->ui.printerLabel->setText(QString());
   d->ui.fileNameEdit->setText("print.ps");
   QDjViewPrefs *prefs = QDjViewPrefs::instance();
   QString printerName = prefs->printerName;
@@ -1610,7 +1621,7 @@ QDjViewPrintDialog::QDjViewPrintDialog(QDjView *djview)
     {
       d->ui.printToFileCheckBox->setChecked(true);
       d->ui.fileNameEdit->setText(printFile);
-      printerName = QString::null;
+      printerName = QString();
     }
   else if (! printerName.isEmpty())
     {
@@ -1713,7 +1724,7 @@ QDjViewPrintDialog::browse()
 {
   QString fname = d->ui.fileNameEdit->text();
   QDjViewExporter *exporter = d->exporter;
-  QString format = (exporter) ? exporter->name() : QString::null;
+  QString format = (exporter) ? exporter->name() : QString();
   QStringList info = QDjViewExporter::info(format);
   QString filters = tr("All files", "save filter") + " (*)";
   QString suffix;
@@ -1724,7 +1735,7 @@ QDjViewPrintDialog::browse()
   fname = QFileDialog::getSaveFileName(this, 
                                        tr("Print To File - DjView", 
                                           "dialog caption"),
-                                       fname, filters, 0, 0);
+                                       fname, filters);
   if (! fname.isEmpty())
     {
       QFileInfo finfo(fname);
@@ -1842,7 +1853,7 @@ QDjViewPrintDialog::start()
             return;
           // save preferences
           QDjViewPrefs *prefs = QDjViewPrefs::instance();
-          prefs->printerName = QString::null;
+          prefs->printerName = QString();
           prefs->printFile = fname;
           // print to file
           exporter->save(fname);
@@ -1852,7 +1863,7 @@ QDjViewPrintDialog::start()
           QPrinter *printer = d->printer;
           // save preferences
           QDjViewPrefs *prefs = QDjViewPrefs::instance();
-          prefs->printFile = QString::null;
+          prefs->printFile = QString();
           prefs->printerName = printer->printerName();
           // print
           exporter->print(d->printer);

@@ -52,8 +52,14 @@
 #include <stdio.h>
 #include <errno.h>
 #include <signal.h>
-#include <unistd.h>
-#include <fcntl.h>
+#ifdef Q_OS_UNIX
+# include <unistd.h>
+# include <fcntl.h>
+#endif
+#ifdef Q_OS_WIN32
+# include <io.h>
+# include <fcntl.h>
+#endif
 
 #if QT_VERSION < 0x50000
 # if defined(Q_WS_X11)
@@ -196,52 +202,46 @@ struct my_xcb_configure_notify_event_t
 class my_timer_object_t : public QObject 
 {
   Q_OBJECT
-  quint32 wid;
-  quint16 w,h;
+  quint32 wid; quint16 w,h; int tid; bool tidp;
 public:
-  my_timer_object_t(quint32, quint16, quint16);
+  my_timer_object_t(quint32 wid)
+    : wid(wid), tid(0), tidp(false) {}
+  void start(quint16 ww, quint16 hh) {
+    if (tidp) killTimer(tid);
+    tidp = true; w = ww; h = hh; startTimer(100); } 
   void timerEvent(QTimerEvent*);
 };
 
 struct my_event_filter_t : public QAbstractNativeEventFilter
 {
-  QMap<quint32,QDjViewPlugin::Instance*> instances;
   virtual bool nativeEventFilter(const QByteArray &type, void *msg, long*);
+  QMap<quint32,QDjViewPlugin::Instance*> instances;
+  QMap<quint32,my_timer_object_t*> timers;
+  static my_event_filter_t *instance() {
+    static my_event_filter_t *filter = 0;
+    return filter ? filter : filter = new my_event_filter_t; }
 };
-
-static my_event_filter_t *my_event_filter()
-{
-  static my_event_filter_t *filter = 0;
-  if (! filter) filter = new my_event_filter_t;
-  return filter;
-}
-
-my_timer_object_t::my_timer_object_t(quint32 wid, quint16 w, quint16 h)
-  : wid(wid), w(w), h(h) 
-{
-  startTimer(1);
-}
-
-void my_timer_object_t::timerEvent(QTimerEvent *ev)
-{
-  QDjViewPlugin::Instance *instance = my_event_filter()->instances.value(wid,0);
-  if (instance && instance->shell) // test for resizing bug
-    if (instance->shell->width() != w || instance->shell->height() != h )
-      instance->shell->resize((int)w, (int)h);
-  killTimer(ev->timerId());
-  deleteLater();
-  wid = 0;
-}
 
 bool my_event_filter_t::nativeEventFilter(const QByteArray &type, void *msg, long*)
 {
-  if (type == "xcb_generic_event_t")
-    {
-      my_xcb_configure_notify_event_t *ev = (my_xcb_configure_notify_event_t*)msg;
-      if (ev->response_type == 22 && instances.contains(ev->window) )
-        new my_timer_object_t(ev->window, ev->width, ev->height);
-    }
+  if (type != "xcb_generic_event_t") return false;
+  my_xcb_configure_notify_event_t *ev = (my_xcb_configure_notify_event_t*)msg;
+  if (! (ev->response_type == 22 && instances.contains(ev->window))) return false;
+  if (! timers.contains(ev->window)) timers.insert(ev->window, new my_timer_object_t(ev->window));
+  timers.value(ev->window)->start(ev->width, ev->height);
   return false;
+}
+
+void my_timer_object_t::timerEvent(QTimerEvent*)
+{
+  my_event_filter_t *f = my_event_filter_t::instance();
+  QDjViewPlugin::Instance *instance = f->instances.value(wid,0);
+  if (instance && instance->shell) // test for resizing bug
+    if (instance->shell->width() != w || instance->shell->height() != h )
+      instance->shell->resize((int)w, (int)h);
+  f->timers.remove(wid);
+  killTimer(tid);
+  deleteLater();
 }
 
 #endif
@@ -593,7 +593,7 @@ QDjViewPlugin::Instance::destroy()
         window->setVisible(false);
         window->setParent(0);
 # if WORKAROUND_QT55_XEMBED_BUG
-        my_event_filter()->instances.remove((quint32)shell->winId());
+        my_event_filter_t::instance()->instances.remove((quint32)shell->winId());
 # endif
       }
 #elif HAVE_X11
@@ -917,7 +917,11 @@ QDjViewPlugin::cmdNew()
       QString val = readString(pipeRead);
       QString k = key.toLower();
       if (k == "flags")
+#if QT_VERSION >= 0x50E00
+        args += val.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
+#else
         args += val.split(QRegExp("\\s+"), QString::SkipEmptyParts);
+#endif
       else
         args += key + QString("=") + val;
     }
@@ -991,7 +995,7 @@ QDjViewPlugin::cmdAttachWindow()
       application->installEventFilter(forwarder);
 #endif
 #if WORKAROUND_QT55_XEMBED_BUG
-      application->installNativeEventFilter(my_event_filter());
+      application->installNativeEventFilter(my_event_filter_t::instance());
 #endif
       QObject::connect(application, SIGNAL(lastWindowClosed()), 
                        forwarder, SLOT(lastViewerClosed()));
@@ -1028,7 +1032,7 @@ QDjViewPlugin::cmdAttachWindow()
           instance->containerwin = cwindow;
           dwindow->setParent(cwindow);
 # if WORKAROUND_QT55_XEMBED_BUG
-          my_event_filter()->instances.insert((quint32)shell->winId(), instance);
+          my_event_filter_t::instance()->instances.insert((quint32)shell->winId(), instance);
 # endif
         }
       else
@@ -1129,7 +1133,7 @@ QDjViewPlugin::cmdDestroy()
   if (instances.contains(instance))
     {
       instance->destroy();
-      QList<Stream*> streamList = streams.toList();
+      QList<Stream*> streamList = streams.values();
       foreach(Stream *stream, streamList)
         if (stream->instance == instance)
           delete(stream);
@@ -1262,7 +1266,7 @@ QDjViewPlugin::cmdUrlNotify()
   QUrl url = QUrl::fromEncoded(readRawString(pipeRead));
   readInteger(pipeRead); // notification code (unused)
   Stream *stream = 0;
-  QList<Stream*> streamList = streams.toList();
+  QList<Stream*> streamList = streams.values();
   foreach(stream, streamList)
     if (!stream->started && stream->url == url)
       delete stream;
@@ -1352,8 +1356,8 @@ QDjViewPlugin::cmdOnChange()
 void
 QDjViewPlugin::cmdShutdown()
 {
-  QList<Stream*> streamList = streams.toList();
-  QList<Instance*> instanceList = instances.toList();
+  QList<Stream*> streamList = streams.values();
+  QList<Instance*> instanceList = instances.values();
   foreach(Instance *s, instanceList)
     s->destroy();
   foreach(Stream *s, streamList) 
@@ -1381,8 +1385,8 @@ static QDjViewPlugin *thePlugin;
 QDjViewPlugin::~QDjViewPlugin()
 {
   thePlugin = 0;
-  QList<Stream*> streamList = streams.toList();
-  QList<Instance*> instanceList = instances.toList();
+  QList<Stream*> streamList = streams.values();
+  QList<Instance*> instanceList = instances.values();
   foreach(Stream *s, streamList) 
     delete(s);
   foreach(Instance *s, instanceList)
@@ -1446,7 +1450,8 @@ QDjViewPlugin::instance()
 int 
 QDjViewPlugin::exec()
 {
-#ifndef QT_NO_DEBUG
+#ifdef Q_OS_UNIX
+ #ifndef QT_NO_DEBUG
   const char *s = ::getenv("DJVIEW_DEBUG");
   if (s && strcmp(s,"0"))
     {
@@ -1455,6 +1460,7 @@ QDjViewPlugin::exec()
       while (loop)
         sleep(1);
     }
+# endif
 #endif
   returnCode = 0;
   quitFlag = false;

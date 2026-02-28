@@ -221,21 +221,25 @@ qcursor_by_name(const char *s, int hotx=8, int hoty=8)
   return QCursor(pixmap, hotx, hoty);
 }
 
+
+#if QT_VERSION > 0x50800
+# define foreachrect(r,rgn) foreach(r,rgn)
+#else
+# define foreachrect(r,rgn) foreach(r,(rgn).rects())
+#endif
+
 static QRegion
 cover_region(QRegion region, const QRect &brect)
 {
-  QVector<QRect> rects = region.rects();
   // dilate region
   QRegion dilated;
-  for (int i=0; i<rects.size(); i++)
-    dilated |= rects[i].adjusted(-8, -8, 8, 8).intersected(brect);
-  rects = dilated.rects();
+  foreachrect(const QRect &r, region)
+    dilated |= r.adjusted(-8, -8, 8, 8).intersected(brect);
   // find nice cover
   QList<int>   myarea;
   QList<QRect> myrect;
-  for (int i=0; i<rects.size(); i++)
+  foreachrect(const QRect &r, dilated)
     {
-      QRect &r = rects[i];
       int a = r.width() * r.height();
       int j = myrect.size();
       while (--j >= 0)
@@ -692,7 +696,7 @@ struct MapArea
   bool contains(const QPoint &p);
   void maybeRotate(struct Page *p);
   QPainterPath contour(QRectMapper &m, QPoint &offset);
-  void update(QWidget *w, QRectMapper &m, QPoint offset, bool clicked=false);
+  void update(QWidget *w, QRectMapper &m, QPoint offset, bool permanent=false);
   void paintBorder(QPaintDevice *w, QRectMapper &m, QPoint offset, bool allLinks=false);
   void paintPermanent(QPaintDevice *w, QRectMapper &m, QPoint o, double z=100);
   void paintTransient(QPaintDevice *w, QRectMapper &m, QPoint o, bool allLinks=false);
@@ -1932,7 +1936,7 @@ QDjVuPrivate::pageinfoPage(QDjVuPage *page)
         case DDJVU_JOB_OK:
           if (p)
             getAnnotationsAndText(p);
-          // no break!
+          /* FALLTHRU */
         case DDJVU_JOB_STARTED:
           if (p && p->dpi <= 0)
             {
@@ -2220,7 +2224,8 @@ QDjVuWidget::setDocument(QDjVuDocument *d)
                   priv, SLOT(info(QString)));
           connect(priv->doc, SIGNAL(idle()),
                   priv, SLOT(makePageRequests()));
-          priv->docinfo();
+          // the document may already be ready
+          QTimer::singleShot(0, priv, SLOT(docinfo()));
         }
       // update
       priv->estimatedWidth = 0;
@@ -3404,10 +3409,12 @@ bool
 MapArea::hasTransient(bool allLinks)
 {
   Keywords &k = *keywords();
-  if (areaType == miniexp_nil || borderAlwaysVisible)
+  if (areaType == miniexp_nil)
     return false;
   if (allLinks && miniexp_stringp(url))
     return true;
+  if (borderAlwaysVisible)
+    return false;
   if (borderType == k.none || borderType == miniexp_nil)
     return false;
   return true;
@@ -3482,16 +3489,28 @@ MapArea::contains(const QPoint &p)
 }
 
 void 
-MapArea::update(QWidget *w, QRectMapper &m, QPoint offset, bool clicked)
+MapArea::update(QWidget *w, QRectMapper &m, QPoint offset, bool permanent)
 {
   // The mapper <m> maps page coordinates to 
   // widget coordinates translated by <offset>.
   Keywords &k = *keywords();
   int bw = borderWidth;
   QRect rect = m.mapped(areaRect).translated(-offset);
-  if (! rect.intersects(w->rect())) 
-    return;
-  if (areaType == k.oval || areaType == k.poly)
+  if (! rect.intersects(w->rect()))
+    {
+      return;
+    }
+  else if (permanent && hiliteColor.isValid() && hiliteOpacity>0)
+    {
+      int bw2 = (bw / 2) + 1;
+      w->update(rect.adjusted(-bw2-1, -bw2-1, bw2+1, bw2+1));
+    }
+  else if (permanent && (areaType == k.text || areaType == k.pushpin))
+    {
+      int bw2 = (bw / 2) + 1;
+      w->update(rect.adjusted(-bw2-1, -bw2-1, bw2+1, bw2+1));
+    }
+  else if (areaType == k.oval || areaType == k.poly)
     {
       int bw2 = (bw / 2) + 1;
       QPainterPath path = contour(m, offset);
@@ -3506,11 +3525,6 @@ MapArea::update(QWidget *w, QRectMapper &m, QPoint offset, bool clicked)
       QRegion region(bm);
       region.translate(rect.topLeft());
       w->update(region);
-    }
-  else if (clicked && (areaType == k.text || areaType == k.pushpin))
-    {
-      int bw2 = (bw / 2) + 1;
-      w->update(rect.adjusted(-bw2-1, -bw2-1, bw2+1, bw2+1));
     }
   else
     {
@@ -3824,7 +3838,7 @@ QDjVuPrivate::showTransientMapAreas(bool b)
           {
             MapArea &area = p->mapAreas[i];
             area.maybeRotate(p);
-            if (area.hasTransient(allLinksDisplayed))
+            if (area.hasTransient(true))
               area.update(widget->viewport(), p->mapper, 
                           visibleRect.topLeft() );
           }
@@ -3848,7 +3862,7 @@ QDjVuWidget::clearHighlights(int pageno)
           {
             MapArea &area = p->mapAreas[j];
             if (priv->pageMap.contains(pageno) && p->dpi>0)
-              area.update(viewport(), p->mapper, priv->visibleRect.topLeft());
+              area.update(viewport(), p->mapper, priv->visibleRect.topLeft(), true);
             priv->pixelCache.clear();
             p->mapAreas.removeAt(j);
           }
@@ -3882,7 +3896,7 @@ QDjVuWidget::addHighlight(int pageno, int x, int y, int w, int h,
       p->mapAreas << area;
       priv->pixelCache.clear();
       if (priv->pageMap.contains(pageno) && p->dpi>0)
-        area.update(viewport(), p->mapper, priv->visibleRect.topLeft());
+        area.update(viewport(), p->mapper, priv->visibleRect.topLeft(), true);
     }
 }
 
@@ -4364,12 +4378,14 @@ QDjVuPrivate::paintHiddenText(QImage &img, Page *p, const QRect &drect,
                     case 2:
                       paint.translate(dw, dh);
                       paint.rotate(180);
+                      /* FALLTHRU */
                     default:
                       paint.scale(dw/bw, dh/bh);
                       break;
                     case 3:
                       paint.translate(dw, dh);
                       paint.rotate(180);
+                      /* FALLTHRU */
                     case 1:
                       paint.translate(dw, 0);
                       paint.rotate(90);
@@ -4517,12 +4533,11 @@ QDjVuPrivate::paintPage(QPainter &paint, Page *p, const QRegion &region)
   else if (display == DISPLAY_FG)
     mode = DDJVU_RENDER_FOREGROUND;
   // render new segments
-  QVector<QRect> rects = cover.rects();
-  for (int i=0; i<rects.size(); i++)
+  foreachrect(const QRect &ri, cover)
     {
       int rot;
       ddjvu_rect_t pr, rr;
-      QRect r = rects[i].translated(visibleRect.topLeft());
+      QRect r = ri.translated(visibleRect.topLeft());
       QImage img(r.width()*dpr, r.height()*dpr, QImage::Format_RGB32);
 #if QT_VERSION >= 0x50200
       img.setDevicePixelRatio(dpr);
@@ -4814,10 +4829,9 @@ QDjVuPrivate::changeSelectedRectangle(const QRect& rect)
   else
     {
       QRegion region = QRegion(newRect) ^ QRegion(oldRect);
-      QVector<QRect> rects = region.rects();
       QRegion dilated;
-      for(int i=0; i<rects.size(); i++)
-        dilated += rects[i].adjusted(-2,-2,2,2);
+      foreachrect(const QRect &r, region)
+        dilated += r.adjusted(-2,-2,2,2);
       widget->viewport()->update(dilated);
     }   
 }
@@ -5238,15 +5252,22 @@ QDjVuWidget::contextMenuEvent (QContextMenuEvent *event)
 void 
 QDjVuWidget::wheelEvent (QWheelEvent *event)
 {
-  if (priv->mouseEnabled && event->orientation() == Qt::Vertical)
+  if (priv->mouseEnabled)
     {
+#if QT_VERSION < 0x50200
+      int delta = 0;
+      if (event->orientation() == Qt::Vertical)
+        delta = event->delta();
+#else
+      int delta = event->angleDelta().y();
+#endif
       bool zoom = priv->mouseWheelZoom;
       if (event->modifiers() == Qt::ControlModifier)
         zoom = ! zoom;
-      if (zoom)
+      if (zoom && delta)
         {
 	  static int zWheel = 0;
-	  zWheel += event->delta();
+	  zWheel += delta;
 	  if (qAbs(zWheel) >= 120)
 	    {
 	      priv->updateCurrentPoint(priv->cursorPos);
@@ -5604,7 +5625,11 @@ QDjVuLens::recenter(const QPoint &p)
   vrect.moveTo(widget->viewport()->mapToGlobal(vrect.topLeft()));
   setVisible(vrect.intersects(rect));
   setGeometry(rect);
+#if QT_VERSION >= 0x50E00
+  QCoreApplication::sendPostedEvents();
+#else
   QCoreApplication::flush();
+#endif
 }
 
 void 
@@ -5678,13 +5703,11 @@ QDjVuLens::paintEvent(QPaintEvent *event)
       if (p->dpi>0 && p->page)
         {
           QRegion prgn = cover_region(region, prect);
-          QVector<QRect> rects = prgn.rects();
-          for (int i=0; i<rects.size(); i++)
+          foreachrect(const QRect &r, prgn)
             {
               int rot;
               ddjvu_rect_t pr, rr;
               QDjVuPage *dp = p->page;
-              QRect &r = rects[i];
               QImage img(r.width()*dpr, r.height()*dpr, QImage::Format_RGB32);
 #if QT_VERSION >= 0x50200
               img.setDevicePixelRatio(dpr);

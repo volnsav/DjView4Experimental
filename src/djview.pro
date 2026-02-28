@@ -37,8 +37,8 @@ CONFIG(autoconf) {
     #   QMAKE_LFLAGS += ...
 } else {
     # customize below
-    INCLUDEPATH += /usr/include
-    LIBS += -L/usr/local/lib -ldjvulibre -ljpeg
+    #INCLUDEPATH += /usr/include
+    #LIBS += -L/usr/local/lib -ldjvulibre -ljpeg
     #QMAKE_CXXFLAGS += 
     #QMAKE_CFLAGS += 
     #QMAKE_LFLAGS += 
@@ -59,7 +59,7 @@ macx {
   RESOURCES.files = images/DjVu.icns
   QMAKE_BUNDLE_DATA += RESOURCES
   QMAKE_INFO_PLIST = djview.plist
-  QMAKE_MACOSX_DEPLOYMENT_TARGET = 10.7
+  QMAKE_MACOSX_DEPLOYMENT_TARGET = 10.13
 } 
 
 # --- windows stuff
