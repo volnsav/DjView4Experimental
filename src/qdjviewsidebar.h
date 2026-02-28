@@ -45,6 +45,7 @@ class QLineEdit;
 class QListView;
 class QMenu;
 class QPushButton;
+class QSlider;
 class QStackedLayout;
 class QToolButton;
 class QTreeWidget;
@@ -95,6 +96,7 @@ public slots:
   void setSmart(bool);
 protected slots:
   void setSize();
+  void sliderChanged(int);
   void pageChanged(int pageno);
   void activated(const QModelIndex &index);
 protected:
@@ -106,6 +108,7 @@ private:
   QDjView             *djview;
   Model               *model;
   View                *view;
+  QSlider             *sizeSlider;
   QItemSelectionModel *selection;
   QMenu               *menu;
 };

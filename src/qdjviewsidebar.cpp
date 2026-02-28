@@ -47,10 +47,12 @@
 #include <QMetaType>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPalette>
 #include <QPushButton>
 #include <QPixmap>
 #include <QRegExp>
 #include <QResizeEvent>
+#include <QSlider>
 #include <QStackedLayout>
 #include <QStringList>
 #include <QTimer>
@@ -59,6 +61,7 @@
 #include <QTreeWidget>
 #include <QVariant>
 #include <QVBoxLayout>
+#include <QWheelEvent>
 #if QT_VERSION >= 0x50000
 # include <QUrlQuery>
 #endif
@@ -342,6 +345,7 @@ public:
   View(QDjViewThumbnails *widget);
 protected:
   QStyleOptionViewItem viewOptions() const;
+  void wheelEvent(QWheelEvent *event);
 private:
   QDjViewThumbnails *widget;
 };
@@ -416,6 +420,29 @@ QDjViewThumbnails::View::viewOptions() const
   opt.decorationSize = QSize(size, size);
   opt.displayAlignment = Qt::AlignCenter;
   return opt;
+}
+
+void
+QDjViewThumbnails::View::wheelEvent(QWheelEvent *event)
+{
+  if ((event->modifiers() & Qt::ControlModifier) != 0)
+    {
+#if QT_VERSION >= 0x050000
+      int delta = event->angleDelta().y();
+#else
+      int delta = event->delta();
+#endif
+      if (delta != 0)
+        {
+          int steps = delta / 120;
+          if (steps == 0)
+            steps = (delta > 0) ? 1 : -1;
+          widget->setSize(widget->size() + steps * 4);
+          event->accept();
+          return;
+        }
+    }
+  QListView::wheelEvent(event);
 }
 
 
@@ -582,8 +609,9 @@ QDjViewThumbnails::Model::setSize(int newSize)
   if (newSize != size)
     {
       size = newSize;
+      const QColor bg = widget->palette().color(QPalette::Base);
       QPixmap pixmap(size,size);
-      pixmap.fill();
+      pixmap.fill(bg);
       QPainter painter;
       int s8 = size/8;
       if (s8 >= 1)
@@ -601,6 +629,8 @@ QDjViewThumbnails::Model::setSize(int newSize)
         }
       icon = QIcon(pixmap);
     }
+  if (names.size() > 0)
+    emit dataChanged(index(0), index(names.size()-1));
   emit layoutChanged();
 }
 
@@ -611,6 +641,7 @@ QDjViewThumbnails::Model::makeIcon(int pageno) const
   QDjVuDocument *doc = djview->getDocument();
   if (doc)
     {
+      const QColor bg = widget->palette().color(QPalette::Base);
       // render thumbnail
 #if QT_VERSION >= 0x50200
       int dpr = djview->devicePixelRatio();
@@ -629,7 +660,7 @@ QDjViewThumbnails::Model::makeIcon(int pageno) const
                                       img.bytesPerLine(), (char*)img.bits() ))
         {
           QPixmap pixmap(size*dpr,size*dpr);
-          pixmap.fill();
+          pixmap.fill(bg);
           QPoint dst((size*dpr-w)/2, (size*dpr-h)/2);
           QRect src(0,0,w,h);
           QPainter painter;
@@ -714,7 +745,16 @@ QDjViewThumbnails::QDjViewThumbnails(QDjView *djview)
 
   QVBoxLayout *layout = new QVBoxLayout(this);
   layout->setContentsMargins(0, 0, 0, 0);
-  layout->setSpacing(0);
+  layout->setSpacing(4);
+  sizeSlider = new QSlider(Qt::Horizontal, this);
+  sizeSlider->setRange(16, 256);
+  sizeSlider->setSingleStep(2);
+  sizeSlider->setPageStep(8);
+  sizeSlider->setValue(model->getSize());
+  sizeSlider->setToolTip(tr("Thumbnail size"));
+  connect(sizeSlider, SIGNAL(valueChanged(int)),
+          this, SLOT(sliderChanged(int)));
+  layout->addWidget(sizeSlider);
   layout->addWidget(view);
   
   connect(djview->getDjVuWidget(), SIGNAL(pageChanged(int)),
@@ -762,6 +802,7 @@ QDjViewThumbnails::QDjViewThumbnails(QDjView *djview)
   setWhatsThis(tr("<html><b>Document thumbnails.</b><br/> "
                   "This panel display thumbnails for the document pages. "
                   "Double click a thumbnail to jump to the selected page. "
+                  "Use the slider or Ctrl+Mouse Wheel to scale thumbnails. "
                   "%1 to change the thumbnail size or the refresh mode. "
                   "The smart refresh mode only computes thumbnails "
                   "when the page data is present (displayed or cached.)"
@@ -822,6 +863,12 @@ void
 QDjViewThumbnails::setSize(int size)
 {
   model->setSize(size);
+  int icon = model->getSize();
+  int text = QFontMetrics(view->font()).height();
+  view->setIconSize(QSize(icon, icon));
+  view->setGridSize(QSize(icon + 24, icon + text + 24));
+  if (sizeSlider && sizeSlider->value() != model->getSize())
+    sizeSlider->setValue(model->getSize());
   updateActions();
 }
 
@@ -832,6 +879,12 @@ QDjViewThumbnails::setSize()
   QAction *action = qobject_cast<QAction*>(sender());
   if (action)
     setSize(action->data().toInt());
+}
+
+void
+QDjViewThumbnails::sliderChanged(int value)
+{
+  setSize(value);
 }
 
 
