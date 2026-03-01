@@ -1,15 +1,19 @@
 name: Windows Build
 
 on:
-  push:
   pull_request:
   workflow_dispatch:
     inputs:
-      include_arm64:
-        description: "Run optional ARM64 build"
+      mode:
+        description: "Build profile"
         required: false
-        default: false
-        type: boolean
+        default: x64-release
+        type: choice
+        options:
+          - x64-release
+          - all-release
+          - all-debug
+          - full
       djvu_repo:
         description: "DjVuLibreExperimental repository (owner/name)"
         required: false
@@ -23,23 +27,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - config: Release
-            platform: x64
-            triplet: x64-windows
-            outdir: Release_x64_strict
-          - config: Debug
-            platform: x64
-            triplet: x64-windows
-            outdir: Debug_x64_strict
-          - config: Release
-            platform: x86
-            triplet: x86-windows
-            outdir: Release_Win32_strict
-          - config: Debug
-            platform: x86
-            triplet: x86-windows
-            outdir: Debug_Win32_strict
+        include: ${{ fromJSON(
+          github.event_name != 'workflow_dispatch' &&
+          '[{"config":"Release","platform":"x64","triplet":"x64-windows","outdir":"Release_x64_strict"}]' ||
+          github.event.inputs.mode == 'x64-release' &&
+          '[{"config":"Release","platform":"x64","triplet":"x64-windows","outdir":"Release_x64_strict"}]' ||
+          github.event.inputs.mode == 'all-release' &&
+          '[{"config":"Release","platform":"x64","triplet":"x64-windows","outdir":"Release_x64_strict"},{"config":"Release","platform":"x86","triplet":"x86-windows","outdir":"Release_Win32_strict"},{"config":"Release","platform":"arm64","triplet":"arm64-windows","outdir":"Release_ARM64_strict"}]' ||
+          github.event.inputs.mode == 'all-debug' &&
+          '[{"config":"Debug","platform":"x64","triplet":"x64-windows","outdir":"Debug_x64_strict"},{"config":"Debug","platform":"x86","triplet":"x86-windows","outdir":"Debug_Win32_strict"}]' ||
+          '[{"config":"Release","platform":"x64","triplet":"x64-windows","outdir":"Release_x64_strict"},{"config":"Debug","platform":"x64","triplet":"x64-windows","outdir":"Debug_x64_strict"},{"config":"Release","platform":"x86","triplet":"x86-windows","outdir":"Release_Win32_strict"},{"config":"Debug","platform":"x86","triplet":"x86-windows","outdir":"Debug_Win32_strict"},{"config":"Release","platform":"arm64","triplet":"arm64-windows","outdir":"Release_ARM64_strict"}]'
+        ) }}
 
     steps:
       - name: Checkout DjView4Experimental
@@ -79,45 +77,4 @@ jobs:
         with:
           name: djview-${{ matrix.config }}-${{ matrix.platform }}
           path: build/${{ matrix.outdir }}
-          if-no-files-found: error
-
-  build_arm64_optional:
-    name: Release arm64 (optional)
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.include_arm64 == 'true' }}
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout DjView4Experimental
-        uses: actions/checkout@v4
-
-      - name: Checkout DjVuLibreExperimental
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.event.inputs.djvu_repo != '' && github.event.inputs.djvu_repo || format('{0}/DjVuLibreExperimental', github.repository_owner) }}
-          path: DjVuLibreExperimental
-
-      - name: Setup vcpkg
-        shell: pwsh
-        run: |
-          git clone https://github.com/microsoft/vcpkg.git vcpkg
-          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
-
-      - name: Install vcpkg dependencies
-        shell: pwsh
-        run: |
-          .\vcpkg\vcpkg.exe install qtbase:x64-windows qtbase:arm64-windows
-
-      - name: Build combined bundle
-        shell: pwsh
-        env:
-          VCPKG_ROOT: ${{ github.workspace }}\vcpkg
-          DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
-        run: |
-          cmd /c build_combined_release.bat Release arm64
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: djview-Release-arm64
-          path: build/Release_ARM64_strict
           if-no-files-found: error
