@@ -1,0 +1,138 @@
+name: Linux Build
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Build profile"
+        required: false
+        default: x64-release
+        type: choice
+        options:
+          - x64-release
+          - all-release
+          - all-debug
+          - full
+
+jobs:
+  build_pr:
+    name: Release x64
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout DjView4Experimental
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            g++ \
+            make \
+            qtbase5-dev \
+            qttools5-dev-tools \
+            libdjvulibre-dev \
+            libtiff-dev \
+            libgl1-mesa-dev
+
+      - name: Configure
+        run: |
+          ./autogen.sh --disable-nsdejavu --disable-desktopfiles
+
+      - name: Build
+        run: |
+          make -j"$(nproc)"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: djview-linux-Release-x64
+          path: |
+            src/djview
+            src/release/djview
+            src/debug/djview
+          if-no-files-found: error
+
+  build_manual:
+    name: ${{ matrix.config }} ${{ matrix.platform }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: Release
+            platform: x64
+            configure_flags: ""
+          - config: Debug
+            platform: x64
+            configure_flags: "--enable-debug"
+
+    steps:
+      - name: Select matrix entry by mode
+        id: mode_filter
+        shell: bash
+        run: |
+          mode='${{ github.event.inputs.mode }}'
+          config='${{ matrix.config }}'
+          run=false
+
+          if [[ "$mode" == "x64-release" ]]; then
+            [[ "$config" == "Release" ]] && run=true
+          elif [[ "$mode" == "all-release" ]]; then
+            [[ "$config" == "Release" ]] && run=true
+          elif [[ "$mode" == "all-debug" ]]; then
+            [[ "$config" == "Debug" ]] && run=true
+          elif [[ "$mode" == "full" ]]; then
+            run=true
+          fi
+
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout DjView4Experimental
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            g++ \
+            make \
+            qtbase5-dev \
+            qttools5-dev-tools \
+            libdjvulibre-dev \
+            libtiff-dev \
+            libgl1-mesa-dev
+
+      - name: Configure
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        run: |
+          ./autogen.sh --disable-nsdejavu --disable-desktopfiles ${{ matrix.configure_flags }}
+
+      - name: Build
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        run: |
+          make -j"$(nproc)"
+
+      - name: Upload artifact
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: djview-linux-${{ matrix.config }}-${{ matrix.platform }}
+          path: |
+            src/djview
+            src/release/djview
+            src/debug/djview
+          if-no-files-found: error
