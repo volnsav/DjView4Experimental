@@ -25,6 +25,8 @@ jobs:
     name: Release x64
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: windows-latest
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}\vcpkg
 
     steps:
       - name: Checkout DjView4Experimental
@@ -96,10 +98,17 @@ jobs:
         run: |
           Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
           $packages = @("qtbase:x64-windows", "qttools:x64-windows", "qtbase:x64-windows-release")
-          .\vcpkg\vcpkg.exe install --overlay-triplets=.github/vcpkg-triplets @packages
+          .\vcpkg\vcpkg.exe --vcpkg-root "$env:GITHUB_WORKSPACE\vcpkg" install --overlay-triplets=.github/vcpkg-triplets @packages
+
+      - name: Sanitize MSVC toolset env
+        shell: pwsh
+        run: |
+          Remove-Item Env:DJVU_PLATFORM_TOOLSET -ErrorAction SilentlyContinue
+          Remove-Item Env:VCVARS_VER -ErrorAction SilentlyContinue
 
       - name: Build combined bundle
         shell: pwsh
+        working-directory: ${{ github.workspace }}
         env:
           VCPKG_ROOT: ${{ github.workspace }}\vcpkg
           VCPKG_TRIPLET: x64-windows-release
@@ -119,6 +128,8 @@ jobs:
     name: ${{ matrix.config }} ${{ matrix.platform }}
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: windows-latest
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}\vcpkg
     strategy:
       fail-fast: false
       matrix:
@@ -261,11 +272,19 @@ jobs:
           if ($targetTriplet -ne $hostTriplet) {
             $packages += "qtbase:$targetTriplet"
           }
-          .\vcpkg\vcpkg.exe install --overlay-triplets=.github/vcpkg-triplets @packages
+          .\vcpkg\vcpkg.exe --vcpkg-root "$env:GITHUB_WORKSPACE\vcpkg" install --overlay-triplets=.github/vcpkg-triplets @packages
+
+      - name: Sanitize MSVC toolset env
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        shell: pwsh
+        run: |
+          Remove-Item Env:DJVU_PLATFORM_TOOLSET -ErrorAction SilentlyContinue
+          Remove-Item Env:VCVARS_VER -ErrorAction SilentlyContinue
 
       - name: Build combined bundle
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         shell: pwsh
+        working-directory: ${{ github.workspace }}
         env:
           VCPKG_ROOT: ${{ github.workspace }}\vcpkg
           VCPKG_TRIPLET: ${{ steps.mode_filter.outputs.target_triplet }}
