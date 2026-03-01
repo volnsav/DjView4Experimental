@@ -8,6 +8,7 @@ rem   VCVARS     - full path to vcvars64.bat
 rem   VCVARS_VER - optional vcvars toolset version
 rem   MSBUILD    - full path to MSBuild.exe
 rem   MSBUILD_MAXCPU - optional max parallel nodes for MSBuild (/m:N)
+rem   DJVU_PLATFORM_TOOLSET - optional MSVC platform toolset override (for example: v142, v143, v145)
 rem   VCPKG_ROOT - path to vcpkg root (for lrelease)
 rem   VCPKG_TRIPLET - vcpkg triplet (default: x64-windows)
 rem   VCPKG_HOST_TRIPLET - host triplet for Qt tools (default: x64-windows)
@@ -56,6 +57,15 @@ if not defined DJVU_ROOT set "DJVU_ROOT=%ROOT%..\DjVuLibreExperimental"
 for %%I in ("%DJVU_ROOT%") do set "DJVU_ROOT=%%~fI"
 set "MSBUILD_PARALLEL=/m"
 if defined MSBUILD_MAXCPU set "MSBUILD_PARALLEL=/m:%MSBUILD_MAXCPU%"
+if not defined DJVU_PLATFORM_TOOLSET if defined VCVARS_VER (
+  if /I "%VCVARS_VER:~0,4%"=="14.2" set "DJVU_PLATFORM_TOOLSET=v142"
+  if /I "%VCVARS_VER:~0,4%"=="14.3" set "DJVU_PLATFORM_TOOLSET=v143"
+  if /I "%VCVARS_VER:~0,4%"=="14.5" set "DJVU_PLATFORM_TOOLSET=v145"
+)
+set "MSBUILD_TOOLSET_ARGS="
+if defined DJVU_PLATFORM_TOOLSET (
+  set "MSBUILD_TOOLSET_ARGS=/p:PlatformToolset=%DJVU_PLATFORM_TOOLSET% /p:DjvuPlatformToolset=%DJVU_PLATFORM_TOOLSET%"
+)
 
 if not defined VCVARS (
   for /d %%D in ("C:\Program Files\Microsoft Visual Studio\*") do (
@@ -113,11 +123,14 @@ call :resolve_git_ref "%DJVU_ROOT%" LIB_GIT_REF
 )
 
 call :prepare_cbt_stamps "%ROOT%src\%BUILD_CONFIG_DIR%" || exit /b 1
-"%MSBUILD%" "%ROOT%src\djview.vcxproj" %MSBUILD_PARALLEL% /p:Configuration=%BUILD_CONFIG% /p:Platform=%BUILD_PLATFORM% /p:VcpkgHostTriplet=%VCPKG_HOST_TRIPLET% /p:TrackFileAccess=false
+"%MSBUILD%" "%ROOT%src\djview.vcxproj" %MSBUILD_PARALLEL% %MSBUILD_TOOLSET_ARGS% /p:Configuration=%BUILD_CONFIG% /p:Platform=%BUILD_PLATFORM% /p:VcpkgHostTriplet=%VCPKG_HOST_TRIPLET% /p:TrackFileAccess=false
 if errorlevel 1 exit /b %errorlevel%
 
 if defined VCPKG_ROOT (
-  if not exist "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\Qt6\bin\lrelease.exe" set "VCPKG_ROOT="
+  if not exist "%VCPKG_ROOT%\vcpkg.exe" set "VCPKG_ROOT="
+)
+if not defined VCPKG_ROOT (
+  if exist "%ROOT%vcpkg\vcpkg.exe" set "VCPKG_ROOT=%ROOT%vcpkg"
 )
 if not defined VCPKG_ROOT (
   if exist "%ROOT%..\vcpkg\vcpkg.exe" set "VCPKG_ROOT=%ROOT%..\vcpkg"
@@ -127,12 +140,16 @@ if not defined VCPKG_ROOT (
 )
 if not defined VCPKG_ROOT (
   for /f "delims=" %%I in ('where vcpkg.exe 2^>nul') do (
-    for %%J in ("%%~dpI..") do set "VCPKG_ROOT=%%~fJ"
+    for %%J in ("%%~dpI.") do set "VCPKG_ROOT=%%~fJ"
     goto :have_vcpkg_root
   )
 )
 :have_vcpkg_root
 if defined VCPKG_ROOT for %%I in ("%VCPKG_ROOT%") do set "VCPKG_ROOT=%%~fI"
+if not defined VCPKG_ROOT (
+  echo ERROR: vcpkg root not found. Set VCPKG_ROOT or clone vcpkg to "%ROOT%vcpkg".
+  exit /b 1
+)
 
 set "LRELEASE_EXE=%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\Qt6\bin\lrelease.exe"
 set "QT_TRANSLATIONS_DIR=%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\translations\Qt6"
