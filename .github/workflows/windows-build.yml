@@ -23,21 +23,41 @@ on:
 jobs:
   build:
     name: ${{ matrix.config }} ${{ matrix.platform }}
+    if: >-
+      ${{
+        (github.event_name == 'pull_request' && matrix.config == 'Release' && matrix.platform == 'x64') ||
+        (github.event_name == 'workflow_dispatch' && (
+          (github.event.inputs.mode == 'x64-release' && matrix.config == 'Release' && matrix.platform == 'x64') ||
+          (github.event.inputs.mode == 'all-release' && matrix.config == 'Release') ||
+          (github.event.inputs.mode == 'all-debug' && matrix.config == 'Debug') ||
+          (github.event.inputs.mode == 'full')
+        ))
+      }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(
-          github.event_name != 'workflow_dispatch' &&
-          '[{"config":"Release","platform":"x64","triplet":"x64-windows","outdir":"Release_x64_strict"}]' ||
-          github.event.inputs.mode == 'x64-release' &&
-          '[{"config":"Release","platform":"x64","triplet":"x64-windows","outdir":"Release_x64_strict"}]' ||
-          github.event.inputs.mode == 'all-release' &&
-          '[{"config":"Release","platform":"x64","triplet":"x64-windows","outdir":"Release_x64_strict"},{"config":"Release","platform":"x86","triplet":"x86-windows","outdir":"Release_Win32_strict"},{"config":"Release","platform":"arm64","triplet":"arm64-windows","outdir":"Release_ARM64_strict"}]' ||
-          github.event.inputs.mode == 'all-debug' &&
-          '[{"config":"Debug","platform":"x64","triplet":"x64-windows","outdir":"Debug_x64_strict"},{"config":"Debug","platform":"x86","triplet":"x86-windows","outdir":"Debug_Win32_strict"}]' ||
-          '[{"config":"Release","platform":"x64","triplet":"x64-windows","outdir":"Release_x64_strict"},{"config":"Debug","platform":"x64","triplet":"x64-windows","outdir":"Debug_x64_strict"},{"config":"Release","platform":"x86","triplet":"x86-windows","outdir":"Release_Win32_strict"},{"config":"Debug","platform":"x86","triplet":"x86-windows","outdir":"Debug_Win32_strict"},{"config":"Release","platform":"arm64","triplet":"arm64-windows","outdir":"Release_ARM64_strict"}]'
-        ) }}
+        include:
+          - config: Release
+            platform: x64
+            triplet: x64-windows
+            outdir: Release_x64_strict
+          - config: Debug
+            platform: x64
+            triplet: x64-windows
+            outdir: Debug_x64_strict
+          - config: Release
+            platform: x86
+            triplet: x86-windows
+            outdir: Release_Win32_strict
+          - config: Debug
+            platform: x86
+            triplet: x86-windows
+            outdir: Debug_Win32_strict
+          - config: Release
+            platform: arm64
+            triplet: arm64-windows
+            outdir: Release_ARM64_strict
 
     steps:
       - name: Checkout DjView4Experimental
