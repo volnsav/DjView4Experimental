@@ -107,8 +107,22 @@ if /I "%BUILD_CONFIG%"=="Debug" (
   set "VCPKG_BIN=%VCPKG_BIN_DBG%"
   set "VCPKG_BIN_FALLBACK=%VCPKG_BIN_REL%"
 )
-set "LRELEASE_EXE=%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\Qt6\bin\lrelease.exe"
+set "LRELEASE_EXE="
+for %%P in (
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\Qt6\bin\lrelease.exe"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\qt6\bin\lrelease.exe"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\qttools\bin\lrelease.exe"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\QtTools\bin\lrelease.exe"
+) do (
+  if not defined LRELEASE_EXE if exist "%%~fP" set "LRELEASE_EXE=%%~fP"
+)
+if not defined LRELEASE_EXE (
+  for /f "delims=" %%I in ('where lrelease.exe 2^>nul') do (
+    if not defined LRELEASE_EXE set "LRELEASE_EXE=%%~fI"
+  )
+)
 set "QT_TRANSLATIONS_DIR=%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\translations\Qt6"
+if not exist "%QT_TRANSLATIONS_DIR%" if exist "%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\translations\qt6" set "QT_TRANSLATIONS_DIR=%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\translations\qt6"
 set "QT_PLUGIN_DIR_REL=%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\Qt6\plugins"
 set "QT_PLUGIN_DIR_DBG=%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\debug\Qt6\plugins"
 set "QT_PLUGIN_DIR=%QT_PLUGIN_DIR_REL%"
@@ -205,9 +219,14 @@ if not exist "%QT_PLUGIN_DIR%\platforms\%QT_PLATFORM_PLUGIN%" (
     exit /b 1
   )
 )
+if not defined LRELEASE_EXE (
+  echo ERROR: lrelease.exe not found for host triplet "%VCPKG_HOST_TRIPLET%".
+  echo        Install Qt tools in vcpkg, for example: qttools:%VCPKG_HOST_TRIPLET%
+  exit /b 1
+)
 if not exist "%LRELEASE_EXE%" (
-  echo ERROR: lrelease.exe not found: "%LRELEASE_EXE%"
-  echo        Check VCPKG_ROOT/VCPKG_TRIPLET and that Qt6 tools are installed in vcpkg.
+  echo ERROR: lrelease.exe path is invalid: "%LRELEASE_EXE%"
+  echo        Install Qt tools in vcpkg, for example: qttools:%VCPKG_HOST_TRIPLET%
   exit /b 1
 )
 
