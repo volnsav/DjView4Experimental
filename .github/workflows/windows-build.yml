@@ -86,22 +86,23 @@ jobs:
             vcpkg/downloads
             vcpkg/packages
             vcpkg/installed
-          key: ${{ runner.os }}-vcpkg-x64-windows-${{ hashFiles('.github/workflows/windows-build.yml') }}
+          key: ${{ runner.os }}-vcpkg-x64-windows-release-${{ hashFiles('.github/workflows/windows-build.yml', '.github/vcpkg-triplets/*') }}
           restore-keys: |
-            ${{ runner.os }}-vcpkg-x64-windows-
+            ${{ runner.os }}-vcpkg-x64-windows-release-
             ${{ runner.os }}-vcpkg-
 
       - name: Install vcpkg dependencies
         shell: pwsh
-        env:
-          VCPKG_BUILD_TYPE: release
         run: |
-          .\vcpkg\vcpkg.exe install qtbase:x64-windows qttools:x64-windows
+          Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
+          .\vcpkg\vcpkg.exe install --overlay-triplets=.github/vcpkg-triplets qtbase:x64-windows-release qttools:x64-windows-release
 
       - name: Build combined bundle
         shell: pwsh
         env:
           VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+          VCPKG_TRIPLET: x64-windows-release
+          VCPKG_HOST_TRIPLET: x64-windows-release
           DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
         run: |
           cmd /c build_combined_release.bat Release x64
@@ -150,6 +151,7 @@ jobs:
           $mode = '${{ github.event.inputs.mode }}'
           $config = '${{ matrix.config }}'
           $platform = '${{ matrix.platform }}'
+          $triplet = '${{ matrix.triplet }}'
 
           $run = $false
           if ($mode -eq 'x64-release') {
@@ -162,7 +164,22 @@ jobs:
             $run = $true
           }
 
+          $targetTriplet = $triplet
+          $hostTriplet = 'x64-windows'
+          if ($config -eq 'Release') {
+            if ($triplet -eq 'x64-windows') {
+              $targetTriplet = 'x64-windows-release'
+            } elseif ($triplet -eq 'x86-windows') {
+              $targetTriplet = 'x86-windows-release'
+            } elseif ($triplet -eq 'arm64-windows') {
+              $targetTriplet = 'arm64-windows-release'
+            }
+            $hostTriplet = 'x64-windows-release'
+          }
+
           "run=$($run.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "target_triplet=$targetTriplet" >> $env:GITHUB_OUTPUT
+          "host_triplet=$hostTriplet" >> $env:GITHUB_OUTPUT
 
       - name: Checkout DjView4Experimental
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
@@ -228,31 +245,31 @@ jobs:
             vcpkg/downloads
             vcpkg/packages
             vcpkg/installed
-          key: ${{ runner.os }}-vcpkg-${{ matrix.triplet }}-${{ hashFiles('.github/workflows/windows-build.yml') }}
+          key: ${{ runner.os }}-vcpkg-${{ steps.mode_filter.outputs.target_triplet }}-${{ steps.mode_filter.outputs.host_triplet }}-${{ hashFiles('.github/workflows/windows-build.yml', '.github/vcpkg-triplets/*') }}
           restore-keys: |
-            ${{ runner.os }}-vcpkg-${{ matrix.triplet }}-
+            ${{ runner.os }}-vcpkg-${{ steps.mode_filter.outputs.target_triplet }}-${{ steps.mode_filter.outputs.host_triplet }}-
             ${{ runner.os }}-vcpkg-
 
       - name: Install vcpkg dependencies
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         shell: pwsh
         run: |
-          if ("${{ matrix.config }}" -eq "Release") {
-            $env:VCPKG_BUILD_TYPE = "release"
-          } else {
-            Remove-Item Env:VCPKG_BUILD_TYPE -ErrorAction SilentlyContinue
+          Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
+          $targetTriplet = "${{ steps.mode_filter.outputs.target_triplet }}"
+          $hostTriplet = "${{ steps.mode_filter.outputs.host_triplet }}"
+          $packages = @("qtbase:$hostTriplet", "qttools:$hostTriplet")
+          if ($targetTriplet -ne $hostTriplet) {
+            $packages += "qtbase:$targetTriplet"
           }
-          $packages = @("qtbase:x64-windows", "qttools:x64-windows")
-          if ("${{ matrix.triplet }}" -ne "x64-windows") {
-            $packages += "qtbase:${{ matrix.triplet }}"
-          }
-          .\vcpkg\vcpkg.exe install @packages
+          .\vcpkg\vcpkg.exe install --overlay-triplets=.github/vcpkg-triplets @packages
 
       - name: Build combined bundle
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         shell: pwsh
         env:
           VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+          VCPKG_TRIPLET: ${{ steps.mode_filter.outputs.target_triplet }}
+          VCPKG_HOST_TRIPLET: ${{ steps.mode_filter.outputs.host_triplet }}
           DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
         run: |
           cmd /c build_combined_release.bat ${{ matrix.config }} ${{ matrix.platform }}
