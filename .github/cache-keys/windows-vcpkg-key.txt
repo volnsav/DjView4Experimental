@@ -1,0 +1,1 @@
+windows-vcpkg-cache-v1
