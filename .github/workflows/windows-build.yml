@@ -86,7 +86,7 @@ jobs:
             vcpkg/downloads
             vcpkg/packages
             vcpkg/installed
-          key: ${{ runner.os }}-vcpkg-x64-windows-release-${{ hashFiles('.github/workflows/windows-build.yml', '.github/vcpkg-triplets/*') }}
+          key: ${{ runner.os }}-vcpkg-x64-windows-release-${{ hashFiles('.github/cache-keys/windows-vcpkg-key.txt', '.github/vcpkg-triplets/*') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-x64-windows-release-
             ${{ runner.os }}-vcpkg-
@@ -245,7 +245,7 @@ jobs:
             vcpkg/downloads
             vcpkg/packages
             vcpkg/installed
-          key: ${{ runner.os }}-vcpkg-${{ steps.mode_filter.outputs.target_triplet }}-${{ steps.mode_filter.outputs.host_triplet }}-${{ hashFiles('.github/workflows/windows-build.yml', '.github/vcpkg-triplets/*') }}
+          key: ${{ runner.os }}-vcpkg-${{ steps.mode_filter.outputs.target_triplet }}-${{ steps.mode_filter.outputs.host_triplet }}-${{ hashFiles('.github/cache-keys/windows-vcpkg-key.txt', '.github/vcpkg-triplets/*') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-${{ steps.mode_filter.outputs.target_triplet }}-${{ steps.mode_filter.outputs.host_triplet }}-
             ${{ runner.os }}-vcpkg-
