@@ -52,8 +52,10 @@ jobs:
             pkg-config \
             g++ \
             make \
-            qtbase5-dev \
-            qttools5-dev-tools \
+            qt6-base-dev \
+            qt6-base-dev-tools \
+            qt6-tools-dev-tools \
+            qt6-l10n-tools \
             libtiff-dev \
             libgl1-mesa-dev \
             libjpeg-dev \
@@ -72,6 +74,7 @@ jobs:
 
       - name: Configure
         run: |
+          export QMAKE=qmake6
           export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/djvulibre-prefix/lib/pkgconfig:$GITHUB_WORKSPACE/djvulibre-prefix/lib64/pkgconfig:${PKG_CONFIG_PATH:-}"
           ./autogen.sh --disable-nsdejavu --disable-desktopfiles
 
@@ -149,8 +152,10 @@ jobs:
             pkg-config \
             g++ \
             make \
-            qtbase5-dev \
-            qttools5-dev-tools \
+            qt6-base-dev \
+            qt6-base-dev-tools \
+            qt6-tools-dev-tools \
+            qt6-l10n-tools \
             libtiff-dev \
             libgl1-mesa-dev \
             libjpeg-dev \
@@ -171,6 +176,7 @@ jobs:
       - name: Configure
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         run: |
+          export QMAKE=qmake6
           export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/djvulibre-prefix/lib/pkgconfig:$GITHUB_WORKSPACE/djvulibre-prefix/lib64/pkgconfig:${PKG_CONFIG_PATH:-}"
           ./autogen.sh --disable-nsdejavu --disable-desktopfiles ${{ matrix.configure_flags }}
 
