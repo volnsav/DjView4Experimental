@@ -93,6 +93,8 @@ jobs:
 
       - name: Install vcpkg dependencies
         shell: pwsh
+        env:
+          VCPKG_BUILD_TYPE: release
         run: |
           .\vcpkg\vcpkg.exe install qtbase:x64-windows
 
@@ -235,6 +237,11 @@ jobs:
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         shell: pwsh
         run: |
+          if ("${{ matrix.config }}" -eq "Release") {
+            $env:VCPKG_BUILD_TYPE = "release"
+          } else {
+            Remove-Item Env:VCPKG_BUILD_TYPE -ErrorAction SilentlyContinue
+          }
           $packages = @("qtbase:x64-windows")
           if ("${{ matrix.triplet }}" -ne "x64-windows") {
             $packages += "qtbase:${{ matrix.triplet }}"
