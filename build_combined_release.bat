@@ -51,11 +51,8 @@ if /I "%BUILD_PLATFORM%"=="x64" (
 set "OUTDIR=%ROOT%build\%BUILD_CONFIG%_%BUILD_PLATFORM_DIR%_strict"
 set "MSBUILD_PARALLEL=/m"
 if defined MSBUILD_MAXCPU set "MSBUILD_PARALLEL=/m:%MSBUILD_MAXCPU%"
-if not defined DJVU_PLATFORM_TOOLSET if defined VCVARS_VER (
-  if /I "%VCVARS_VER:~0,4%"=="14.2" set "DJVU_PLATFORM_TOOLSET=v142"
-  if /I "%VCVARS_VER:~0,4%"=="14.3" set "DJVU_PLATFORM_TOOLSET=v143"
-  if /I "%VCVARS_VER:~0,4%"=="14.5" set "DJVU_PLATFORM_TOOLSET=v145"
-)
+rem Do not infer PlatformToolset from VCVARS_VER:
+rem keep toolset selection automatic via current VS/MSBuild defaults.
 set "MSBUILD_TOOLSET_ARGS="
 if defined DJVU_PLATFORM_TOOLSET (
   set "MSBUILD_TOOLSET_ARGS=/p:PlatformToolset=%DJVU_PLATFORM_TOOLSET% /p:DjvuPlatformToolset=%DJVU_PLATFORM_TOOLSET%"

@@ -103,7 +103,6 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}\vcpkg
           VCPKG_TRIPLET: x64-windows-release
           VCPKG_HOST_TRIPLET: x64-windows-release
-          DJVU_PLATFORM_TOOLSET: v143
           DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
         run: |
           cmd /c build_combined_release.bat Release x64
@@ -271,7 +270,6 @@ jobs:
           VCPKG_ROOT: ${{ github.workspace }}\vcpkg
           VCPKG_TRIPLET: ${{ steps.mode_filter.outputs.target_triplet }}
           VCPKG_HOST_TRIPLET: ${{ steps.mode_filter.outputs.host_triplet }}
-          DJVU_PLATFORM_TOOLSET: v143
           DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
         run: |
           cmd /c build_combined_release.bat ${{ matrix.config }} ${{ matrix.platform }}
