@@ -21,23 +21,10 @@ on:
         type: string
 
 jobs:
-  build:
-    name: ${{ matrix.config }} ${{ matrix.platform }}
+  build_pr:
+    name: Release x64
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(
-          github.event_name != 'workflow_dispatch' &&
-          '[{"config":"Release","platform":"x64","triplet":"x64-windows","outdir":"Release_x64_strict"}]' ||
-          github.event.inputs.mode == 'x64-release' &&
-          '[{"config":"Release","platform":"x64","triplet":"x64-windows","outdir":"Release_x64_strict"}]' ||
-          github.event.inputs.mode == 'all-release' &&
-          '[{"config":"Release","platform":"x64","triplet":"x64-windows","outdir":"Release_x64_strict"},{"config":"Release","platform":"x86","triplet":"x86-windows","outdir":"Release_Win32_strict"},{"config":"Release","platform":"arm64","triplet":"arm64-windows","outdir":"Release_ARM64_strict"}]' ||
-          github.event.inputs.mode == 'all-debug' &&
-          '[{"config":"Debug","platform":"x64","triplet":"x64-windows","outdir":"Debug_x64_strict"},{"config":"Debug","platform":"x86","triplet":"x86-windows","outdir":"Debug_Win32_strict"}]' ||
-          '[{"config":"Release","platform":"x64","triplet":"x64-windows","outdir":"Release_x64_strict"},{"config":"Debug","platform":"x64","triplet":"x64-windows","outdir":"Debug_x64_strict"},{"config":"Release","platform":"x86","triplet":"x86-windows","outdir":"Release_Win32_strict"},{"config":"Debug","platform":"x86","triplet":"x86-windows","outdir":"Debug_Win32_strict"},{"config":"Release","platform":"arm64","triplet":"arm64-windows","outdir":"Release_ARM64_strict"}]'
-        ) }}
 
     steps:
       - name: Checkout DjView4Experimental
@@ -46,7 +33,7 @@ jobs:
       - name: Checkout DjVuLibreExperimental
         uses: actions/checkout@v4
         with:
-          repository: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.djvu_repo != '' && github.event.inputs.djvu_repo || format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          repository: ${{ format('{0}/DjVuLibreExperimental', github.repository_owner) }}
           path: DjVuLibreExperimental
 
       - name: Setup vcpkg
@@ -62,12 +49,115 @@ jobs:
             vcpkg/downloads
             vcpkg/packages
             vcpkg/installed
+          key: ${{ runner.os }}-vcpkg-x64-windows-${{ hashFiles('.github/workflows/windows-build.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-x64-windows-
+            ${{ runner.os }}-vcpkg-
+
+      - name: Install vcpkg dependencies
+        shell: pwsh
+        run: |
+          .\vcpkg\vcpkg.exe install qtbase:x64-windows
+
+      - name: Build combined bundle
+        shell: pwsh
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+          DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
+        run: |
+          cmd /c build_combined_release.bat Release x64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: djview-Release-x64
+          path: build/Release_x64_strict
+          if-no-files-found: error
+
+  build_manual:
+    name: ${{ matrix.config }} ${{ matrix.platform }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: Release
+            platform: x64
+            triplet: x64-windows
+            outdir: Release_x64_strict
+          - config: Debug
+            platform: x64
+            triplet: x64-windows
+            outdir: Debug_x64_strict
+          - config: Release
+            platform: x86
+            triplet: x86-windows
+            outdir: Release_Win32_strict
+          - config: Debug
+            platform: x86
+            triplet: x86-windows
+            outdir: Debug_Win32_strict
+          - config: Release
+            platform: arm64
+            triplet: arm64-windows
+            outdir: Release_ARM64_strict
+
+    steps:
+      - name: Select matrix entry by mode
+        id: mode_filter
+        shell: pwsh
+        run: |
+          $mode = '${{ github.event.inputs.mode }}'
+          $config = '${{ matrix.config }}'
+          $platform = '${{ matrix.platform }}'
+
+          $run = $false
+          if ($mode -eq 'x64-release') {
+            $run = ($config -eq 'Release' -and $platform -eq 'x64')
+          } elseif ($mode -eq 'all-release') {
+            $run = ($config -eq 'Release')
+          } elseif ($mode -eq 'all-debug') {
+            $run = ($config -eq 'Debug')
+          } elseif ($mode -eq 'full') {
+            $run = $true
+          }
+
+          "run=$($run.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout DjView4Experimental
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        uses: actions/checkout@v4
+
+      - name: Checkout DjVuLibreExperimental
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.djvu_repo != '' && github.event.inputs.djvu_repo || format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          path: DjVuLibreExperimental
+
+      - name: Setup vcpkg
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git vcpkg
+          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Cache vcpkg artifacts
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            vcpkg/downloads
+            vcpkg/packages
+            vcpkg/installed
           key: ${{ runner.os }}-vcpkg-${{ matrix.triplet }}-${{ hashFiles('.github/workflows/windows-build.yml') }}
           restore-keys: |
             ${{ runner.os }}-vcpkg-${{ matrix.triplet }}-
             ${{ runner.os }}-vcpkg-
 
       - name: Install vcpkg dependencies
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
         shell: pwsh
         run: |
           $packages = @("qtbase:x64-windows")
@@ -77,6 +167,7 @@ jobs:
           .\vcpkg\vcpkg.exe install @packages
 
       - name: Build combined bundle
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
         shell: pwsh
         env:
           VCPKG_ROOT: ${{ github.workspace }}\vcpkg
@@ -85,6 +176,7 @@ jobs:
           cmd /c build_combined_release.bat ${{ matrix.config }} ${{ matrix.platform }}
 
       - name: Upload artifact
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: djview-${{ matrix.config }}-${{ matrix.platform }}
