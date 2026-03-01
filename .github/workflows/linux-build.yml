@@ -14,6 +14,16 @@ on:
           - all-release
           - all-debug
           - full
+      djvu_repo:
+        description: "DjVuLibreExperimental repository (owner/name)"
+        required: false
+        default: ""
+        type: string
+      djvu_ref:
+        description: "DjVuLibreExperimental git ref (branch/tag/sha)"
+        required: false
+        default: "develop"
+        type: string
 
 jobs:
   build_pr:
@@ -24,6 +34,13 @@ jobs:
     steps:
       - name: Checkout DjView4Experimental
         uses: actions/checkout@v4
+
+      - name: Checkout DjVuLibreExperimental
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          ref: develop
+          path: DjVuLibreExperimental
 
       - name: Install dependencies
         run: |
@@ -37,12 +54,25 @@ jobs:
             make \
             qtbase5-dev \
             qttools5-dev-tools \
-            libdjvulibre-dev \
             libtiff-dev \
-            libgl1-mesa-dev
+            libgl1-mesa-dev \
+            libjpeg-dev \
+            zlib1g-dev
+
+      - name: Build and install DjVuLibreExperimental
+        run: |
+          cd DjVuLibreExperimental
+          if [[ -x ./autogen.sh ]]; then
+            ./autogen.sh --prefix="$GITHUB_WORKSPACE/djvulibre-prefix"
+          else
+            ./configure --prefix="$GITHUB_WORKSPACE/djvulibre-prefix"
+          fi
+          make -j"$(nproc)"
+          make install
 
       - name: Configure
         run: |
+          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/djvulibre-prefix/lib/pkgconfig:$GITHUB_WORKSPACE/djvulibre-prefix/lib64/pkgconfig:${PKG_CONFIG_PATH:-}"
           ./autogen.sh --disable-nsdejavu --disable-desktopfiles
 
       - name: Build
@@ -57,6 +87,7 @@ jobs:
             src/djview
             src/release/djview
             src/debug/djview
+            djvulibre-prefix/lib/libdjvulibre.so*
           if-no-files-found: error
 
   build_manual:
@@ -99,6 +130,14 @@ jobs:
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         uses: actions/checkout@v4
 
+      - name: Checkout DjVuLibreExperimental
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.djvu_repo != '' && github.event.inputs.djvu_repo || format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          ref: ${{ github.event.inputs.djvu_ref }}
+          path: DjVuLibreExperimental
+
       - name: Install dependencies
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         run: |
@@ -112,13 +151,27 @@ jobs:
             make \
             qtbase5-dev \
             qttools5-dev-tools \
-            libdjvulibre-dev \
             libtiff-dev \
-            libgl1-mesa-dev
+            libgl1-mesa-dev \
+            libjpeg-dev \
+            zlib1g-dev
+
+      - name: Build and install DjVuLibreExperimental
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        run: |
+          cd DjVuLibreExperimental
+          if [[ -x ./autogen.sh ]]; then
+            ./autogen.sh --prefix="$GITHUB_WORKSPACE/djvulibre-prefix"
+          else
+            ./configure --prefix="$GITHUB_WORKSPACE/djvulibre-prefix"
+          fi
+          make -j"$(nproc)"
+          make install
 
       - name: Configure
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         run: |
+          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/djvulibre-prefix/lib/pkgconfig:$GITHUB_WORKSPACE/djvulibre-prefix/lib64/pkgconfig:${PKG_CONFIG_PATH:-}"
           ./autogen.sh --disable-nsdejavu --disable-desktopfiles ${{ matrix.configure_flags }}
 
       - name: Build
@@ -135,4 +188,5 @@ jobs:
             src/djview
             src/release/djview
             src/debug/djview
+            djvulibre-prefix/lib/libdjvulibre.so*
           if-no-files-found: error
