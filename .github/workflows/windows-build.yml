@@ -106,7 +106,7 @@ jobs:
           VCPKG_HOST_TRIPLET: x64-windows
           DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
         run: |
-          cmd /c build_combined_release.bat Release x64
+          cmd /c .\build_combined_release.bat Release x64
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -272,7 +272,7 @@ jobs:
           VCPKG_HOST_TRIPLET: ${{ steps.mode_filter.outputs.host_triplet }}
           DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
         run: |
-          cmd /c build_combined_release.bat ${{ matrix.config }} ${{ matrix.platform }}
+          cmd /c .\build_combined_release.bat ${{ matrix.config }} ${{ matrix.platform }}
 
       - name: Upload artifact
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
