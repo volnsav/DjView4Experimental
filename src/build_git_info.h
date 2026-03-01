@@ -1,5 +1,5 @@
 #ifndef BUILD_GIT_INFO_H
 #define BUILD_GIT_INFO_H
-#define DJVIEW_APP_GIT_REF "develop+537ac9c"
-#define DJVIEW_LIB_GIT_REF "develop+ded0252"
+#define DJVIEW_APP_GIT_REF "feature/tabs-documents+d12e9b1"
+#define DJVIEW_LIB_GIT_REF "develop+12cd953"
 #endif
