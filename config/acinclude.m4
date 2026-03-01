@@ -333,6 +333,10 @@ If you define QMAKESPEC, make sure it is correct.])
       AC_MSG_RESULT([qt5 ($QT_VERSION)]) 
       qtversion=qt5
       ;;
+    6.*)
+      AC_MSG_RESULT([qt6 ($QT_VERSION)])
+      qtversion=qt6
+      ;;
     *)
       AC_MSG_RESULT([$QT_VERSION]) 
       AC_MSG_ERROR([Unrecognized Qt version. Please define variable QMAKE.])
@@ -363,5 +367,4 @@ If you define QMAKESPEC, make sure it is correct.])
   AC_PATH_PROGS([LRELEASE], [${altlrelease} lrelease], [], [$path])
   PATH=$path
 ])
-
 
