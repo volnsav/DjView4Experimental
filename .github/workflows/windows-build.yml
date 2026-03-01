@@ -34,6 +34,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          ref: develop
           path: DjVuLibreExperimental
 
       - name: Setup vcpkg
@@ -134,6 +135,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ github.event.inputs.djvu_repo != '' && github.event.inputs.djvu_repo || format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          ref: develop
           path: DjVuLibreExperimental
 
       - name: Setup vcpkg
