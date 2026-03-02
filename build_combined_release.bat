@@ -350,8 +350,25 @@ if defined VCPKG_BIN_FALLBACK echo        and fallback: "%VCPKG_BIN_FALLBACK%"
 exit /b 1
 
 :select_djvu_toolset
-set "TOOLSET_DIR=%VCTargetsPath%\Platforms\%BUILD_PLATFORM%\PlatformToolsets"
-if not exist "%TOOLSET_DIR%" set "TOOLSET_DIR=%VCTargetsPath%\Platforms\%BUILD_PLATFORM_DIR%\PlatformToolsets"
+set "TOOLSET_BASE="
+if defined VCTargetsPath if exist "%VCTargetsPath%" set "TOOLSET_BASE=%VCTargetsPath%"
+if not defined TOOLSET_BASE if defined VSINSTALLDIR (
+  for %%V in (v180 v170 v160) do (
+    if not defined TOOLSET_BASE if exist "%VSINSTALLDIR%MSBuild\Microsoft\VC\%%V\Platforms\%BUILD_PLATFORM%\PlatformToolsets" set "TOOLSET_BASE=%VSINSTALLDIR%MSBuild\Microsoft\VC\%%V"
+    if not defined TOOLSET_BASE if exist "%VSINSTALLDIR%MSBuild\Microsoft\VC\%%V\Platforms\%BUILD_PLATFORM_DIR%\PlatformToolsets" set "TOOLSET_BASE=%VSINSTALLDIR%MSBuild\Microsoft\VC\%%V"
+  )
+)
+if not defined TOOLSET_BASE if defined VCToolsInstallDir (
+  set "VSROOT=%VCToolsInstallDir%"
+  for %%I in ("!VSROOT!\..\..\..\..") do set "VSROOT=%%~fI"
+  for %%V in (v180 v170 v160) do (
+    if not defined TOOLSET_BASE if exist "!VSROOT!MSBuild\Microsoft\VC\%%V\Platforms\%BUILD_PLATFORM%\PlatformToolsets" set "TOOLSET_BASE=!VSROOT!MSBuild\Microsoft\VC\%%V"
+    if not defined TOOLSET_BASE if exist "!VSROOT!MSBuild\Microsoft\VC\%%V\Platforms\%BUILD_PLATFORM_DIR%\PlatformToolsets" set "TOOLSET_BASE=!VSROOT!MSBuild\Microsoft\VC\%%V"
+  )
+)
+
+set "TOOLSET_DIR=%TOOLSET_BASE%\Platforms\%BUILD_PLATFORM%\PlatformToolsets"
+if not exist "%TOOLSET_DIR%" set "TOOLSET_DIR=%TOOLSET_BASE%\Platforms\%BUILD_PLATFORM_DIR%\PlatformToolsets"
 if exist "%TOOLSET_DIR%\v145\Toolset.props" (
   set "DJVU_PLATFORM_TOOLSET=v145"
   exit /b 0
@@ -365,6 +382,8 @@ if exist "%TOOLSET_DIR%\v142\Toolset.props" (
   exit /b 0
 )
 echo ERROR: no supported MSVC platform toolset found under "%TOOLSET_DIR%".
+echo        VCTargetsPath="%VCTargetsPath%"
+echo        VSINSTALLDIR="%VSINSTALLDIR%"
 echo        Install v143/v142 build tools or set DJVU_PLATFORM_TOOLSET manually.
 exit /b 1
 
