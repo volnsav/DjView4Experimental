@@ -13,6 +13,11 @@ on:
           - release
           - debug
           - both
+      with_vcpkg:
+        description: "Run minimal vcpkg install smoke"
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   smoke:
@@ -43,6 +48,38 @@ jobs:
       - name: Setup MSBuild
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         uses: microsoft/setup-msbuild@v2
+
+      - name: Setup vcpkg
+        if: ${{ steps.mode_filter.outputs.run == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.with_vcpkg == 'true') }}
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git vcpkg
+          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Cache vcpkg artifacts
+        if: ${{ steps.mode_filter.outputs.run == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.with_vcpkg == 'true') }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            vcpkg/downloads
+            vcpkg/packages
+            vcpkg/installed
+          key: ${{ runner.os }}-vcpkg-smoke-x64-${{ hashFiles('.github/cache-keys/windows-vcpkg-key.txt', '.github/vcpkg-triplets/*') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-smoke-x64-
+            ${{ runner.os }}-vcpkg-
+
+      - name: Install minimal vcpkg packages
+        if: ${{ steps.mode_filter.outputs.run == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.with_vcpkg == 'true') }}
+        shell: pwsh
+        run: |
+          Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
+          $packages = @(
+            "zlib:x64-windows",
+            "libjpeg-turbo:x64-windows",
+            "zlib:x64-windows-release"
+          )
+          .\vcpkg\vcpkg.exe --vcpkg-root "$env:GITHUB_WORKSPACE\vcpkg" install --overlay-triplets=.github/vcpkg-triplets @packages
 
       - name: Detect MSVC toolset
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
@@ -98,4 +135,3 @@ jobs:
           path: |
             ci/msbuild-smoke/x64/${{ matrix.config }}/msbuild_smoke.exe
           if-no-files-found: error
-
