@@ -1,0 +1,101 @@
+name: Windows Toolset Smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Smoke profile"
+        required: false
+        default: both
+        type: choice
+        options:
+          - release
+          - debug
+          - both
+
+jobs:
+  smoke:
+    name: Smoke ${{ matrix.config }} x64
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Release, Debug]
+
+    steps:
+      - name: Select config by mode
+        id: mode_filter
+        shell: pwsh
+        run: |
+          $mode = '${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mode || 'both' }}'
+          $cfg = '${{ matrix.config }}'
+          $run = $false
+          if ($mode -eq 'both') { $run = $true }
+          elseif ($mode -eq 'release' -and $cfg -eq 'Release') { $run = $true }
+          elseif ($mode -eq 'debug' -and $cfg -eq 'Debug') { $run = $true }
+          "run=$($run.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Detect MSVC toolset
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        id: toolset
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) {
+            Write-Error "vswhere.exe not found"
+            exit 1
+          }
+          $installPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($installPath)) {
+            Write-Error "Failed to detect Visual Studio installation path"
+            exit 1
+          }
+
+          $candidates = @('v145', 'v143', 'v142')
+          $vcTrees = @('v180', 'v170', 'v160')
+          $toolset = $null
+
+          foreach ($vcTree in $vcTrees) {
+            foreach ($v in $candidates) {
+              $probe = Join-Path $installPath "MSBuild\Microsoft\VC\$vcTree\Platforms\x64\PlatformToolsets\$v\Toolset.props"
+              if (Test-Path $probe) { $toolset = $v; break }
+            }
+            if ($toolset) { break }
+          }
+
+          if (-not $toolset) {
+            Write-Error "No supported MSVC toolset found (v145/v143/v142)"
+            exit 1
+          }
+
+          "toolset=$toolset" >> $env:GITHUB_OUTPUT
+          Write-Host "Detected toolset: $toolset"
+
+      - name: Build smoke project
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        shell: pwsh
+        run: |
+          msbuild .\ci\msbuild-smoke\msbuild_smoke.vcxproj `
+            /m `
+            /p:Configuration=${{ matrix.config }} `
+            /p:Platform=x64 `
+            /p:PlatformToolset=${{ steps.toolset.outputs.toolset }}
+
+      - name: Upload smoke binary
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: msbuild-smoke-${{ matrix.config }}-x64
+          path: |
+            ci/msbuild-smoke/x64/${{ matrix.config }}/msbuild_smoke.exe
+          if-no-files-found: error
+
