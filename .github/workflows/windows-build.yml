@@ -102,7 +102,6 @@ jobs:
       - name: Sanitize MSVC toolset env
         shell: pwsh
         run: |
-          Remove-Item Env:DJVU_PLATFORM_TOOLSET -ErrorAction SilentlyContinue
           Remove-Item Env:VCVARS_VER -ErrorAction SilentlyContinue
 
       - name: Build combined bundle
@@ -113,6 +112,7 @@ jobs:
           VCPKG_TRIPLET: x64-windows-release
           VCPKG_HOST_TRIPLET: x64-windows
           DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
+          DJVU_PLATFORM_TOOLSET: v143
         run: |
           cmd /c .\build_combined_release.bat Release x64
 
@@ -257,7 +257,6 @@ jobs:
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         shell: pwsh
         run: |
-          Remove-Item Env:DJVU_PLATFORM_TOOLSET -ErrorAction SilentlyContinue
           Remove-Item Env:VCVARS_VER -ErrorAction SilentlyContinue
 
       - name: Build combined bundle
@@ -269,6 +268,7 @@ jobs:
           VCPKG_TRIPLET: ${{ steps.mode_filter.outputs.target_triplet }}
           VCPKG_HOST_TRIPLET: ${{ steps.mode_filter.outputs.host_triplet }}
           DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
+          DJVU_PLATFORM_TOOLSET: v143
         run: |
           cmd /c .\build_combined_release.bat ${{ matrix.config }} ${{ matrix.platform }}
 
