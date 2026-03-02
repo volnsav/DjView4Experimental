@@ -104,6 +104,38 @@ jobs:
         run: |
           Remove-Item Env:VCVARS_VER -ErrorAction SilentlyContinue
 
+      - name: Detect DjVu MSVC toolset
+        id: djvu_toolset
+        shell: pwsh
+        run: |
+          if ($env:DJVU_PLATFORM_TOOLSET) {
+            "toolset=$env:DJVU_PLATFORM_TOOLSET" >> $env:GITHUB_OUTPUT
+            Write-Host "Using preconfigured DJVU_PLATFORM_TOOLSET=$env:DJVU_PLATFORM_TOOLSET"
+            exit 0
+          }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) {
+            Write-Error "vswhere.exe not found"
+            exit 1
+          }
+          $installPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($installPath)) {
+            Write-Error "Failed to resolve Visual Studio installation path via vswhere"
+            exit 1
+          }
+          $candidates = @('v145', 'v143', 'v142')
+          $toolset = $null
+          foreach ($v in $candidates) {
+            $probe = Join-Path $installPath "MSBuild\Microsoft\VC\v170\Platforms\x64\PlatformToolsets\$v\Toolset.props"
+            if (Test-Path $probe) { $toolset = $v; break }
+          }
+          if (-not $toolset) {
+            Write-Error "No supported MSVC toolset found (v145/v143/v142)"
+            exit 1
+          }
+          "toolset=$toolset" >> $env:GITHUB_OUTPUT
+          Write-Host "Detected DJVU_PLATFORM_TOOLSET=$toolset"
+
       - name: Build combined bundle
         shell: pwsh
         working-directory: ${{ github.workspace }}
@@ -112,7 +144,7 @@ jobs:
           VCPKG_TRIPLET: x64-windows-release
           VCPKG_HOST_TRIPLET: x64-windows
           DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
-          DJVU_PLATFORM_TOOLSET: v143
+          DJVU_PLATFORM_TOOLSET: ${{ steps.djvu_toolset.outputs.toolset }}
         run: |
           cmd /c .\build_combined_release.bat Release x64
 
@@ -259,6 +291,39 @@ jobs:
         run: |
           Remove-Item Env:VCVARS_VER -ErrorAction SilentlyContinue
 
+      - name: Detect DjVu MSVC toolset
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        id: djvu_toolset
+        shell: pwsh
+        run: |
+          if ($env:DJVU_PLATFORM_TOOLSET) {
+            "toolset=$env:DJVU_PLATFORM_TOOLSET" >> $env:GITHUB_OUTPUT
+            Write-Host "Using preconfigured DJVU_PLATFORM_TOOLSET=$env:DJVU_PLATFORM_TOOLSET"
+            exit 0
+          }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) {
+            Write-Error "vswhere.exe not found"
+            exit 1
+          }
+          $installPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($installPath)) {
+            Write-Error "Failed to resolve Visual Studio installation path via vswhere"
+            exit 1
+          }
+          $candidates = @('v145', 'v143', 'v142')
+          $toolset = $null
+          foreach ($v in $candidates) {
+            $probe = Join-Path $installPath "MSBuild\Microsoft\VC\v170\Platforms\x64\PlatformToolsets\$v\Toolset.props"
+            if (Test-Path $probe) { $toolset = $v; break }
+          }
+          if (-not $toolset) {
+            Write-Error "No supported MSVC toolset found (v145/v143/v142)"
+            exit 1
+          }
+          "toolset=$toolset" >> $env:GITHUB_OUTPUT
+          Write-Host "Detected DJVU_PLATFORM_TOOLSET=$toolset"
+
       - name: Build combined bundle
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         shell: pwsh
@@ -268,7 +333,7 @@ jobs:
           VCPKG_TRIPLET: ${{ steps.mode_filter.outputs.target_triplet }}
           VCPKG_HOST_TRIPLET: ${{ steps.mode_filter.outputs.host_triplet }}
           DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
-          DJVU_PLATFORM_TOOLSET: v143
+          DJVU_PLATFORM_TOOLSET: ${{ steps.djvu_toolset.outputs.toolset }}
         run: |
           cmd /c .\build_combined_release.bat ${{ matrix.config }} ${{ matrix.platform }}
 
