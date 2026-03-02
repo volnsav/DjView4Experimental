@@ -1,0 +1,127 @@
+name: Windows Build Master (Old)
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Legacy build profile"
+        required: false
+        default: win32-release
+        type: choice
+        options:
+          - win32-release
+          - win32-debug
+          - both
+      djvu_repo:
+        description: "DjVuLibreExperimental repository (owner/name)"
+        required: false
+        default: ""
+        type: string
+      djvu_ref:
+        description: "DjVuLibreExperimental git ref (branch/tag/sha)"
+        required: false
+        default: "master"
+        type: string
+
+jobs:
+  build_master_old:
+    name: Legacy Win32 Release
+    if: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout DjView4Experimental
+        uses: actions/checkout@v4
+
+      - name: Checkout DjVuLibreExperimental
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          ref: master
+          path: DjVuLibreExperimental
+
+      - name: Build combined bundle (legacy)
+        shell: pwsh
+        env:
+          DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
+          VCPKG_TRIPLET: x86-windows-release
+          VCPKG_HOST_TRIPLET: x64-windows
+        run: |
+          cmd /c .\build_combined_release.bat Release x86
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: djview-legacy-Release-Win32
+          path: build/Release_Win32_strict
+          if-no-files-found: error
+
+  build_master_old_manual:
+    name: Legacy ${{ matrix.config }} Win32
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - config: Release
+            outdir: Release_Win32_strict
+            triplet: x86-windows-release
+          - config: Debug
+            outdir: Debug_Win32_strict
+            triplet: x86-windows
+
+    steps:
+      - name: Select mode
+        id: mode
+        shell: pwsh
+        run: |
+          $mode = '${{ github.event.inputs.mode }}'
+          $config = '${{ matrix.config }}'
+          $run = $false
+
+          if ($mode -eq 'both') {
+            $run = $true
+          } elseif ($mode -eq 'win32-release' -and $config -eq 'Release') {
+            $run = $true
+          } elseif ($mode -eq 'win32-debug' -and $config -eq 'Debug') {
+            $run = $true
+          }
+
+          "run=$($run.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout DjView4Experimental
+        if: ${{ steps.mode.outputs.run == 'true' }}
+        uses: actions/checkout@v4
+
+      - name: Checkout DjVuLibreExperimental
+        if: ${{ steps.mode.outputs.run == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.djvu_repo != '' && github.event.inputs.djvu_repo || format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          ref: ${{ github.event.inputs.djvu_ref }}
+          path: DjVuLibreExperimental
+
+      - name: Build combined bundle (legacy)
+        if: ${{ steps.mode.outputs.run == 'true' }}
+        shell: pwsh
+        env:
+          DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
+          VCPKG_TRIPLET: ${{ matrix.triplet }}
+          VCPKG_HOST_TRIPLET: x64-windows
+        run: |
+          cmd /c .\build_combined_release.bat ${{ matrix.config }} x86
+
+      - name: Upload artifact
+        if: ${{ steps.mode.outputs.run == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: djview-legacy-${{ matrix.config }}-Win32
+          path: build/${{ matrix.outdir }}
+          if-no-files-found: error
