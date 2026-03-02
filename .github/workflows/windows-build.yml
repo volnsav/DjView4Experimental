@@ -124,10 +124,14 @@ jobs:
             exit 1
           }
           $candidates = @('v145', 'v143', 'v142')
+          $vcTrees = @('v180', 'v170', 'v160')
           $toolset = $null
-          foreach ($v in $candidates) {
-            $probe = Join-Path $installPath "MSBuild\Microsoft\VC\v170\Platforms\x64\PlatformToolsets\$v\Toolset.props"
-            if (Test-Path $probe) { $toolset = $v; break }
+          foreach ($vcTree in $vcTrees) {
+            foreach ($v in $candidates) {
+              $probe = Join-Path $installPath "MSBuild\Microsoft\VC\$vcTree\Platforms\x64\PlatformToolsets\$v\Toolset.props"
+              if (Test-Path $probe) { $toolset = $v; break }
+            }
+            if ($toolset) { break }
           }
           if (-not $toolset) {
             Write-Error "No supported MSVC toolset found (v145/v143/v142)"
@@ -312,10 +316,14 @@ jobs:
             exit 1
           }
           $candidates = @('v145', 'v143', 'v142')
+          $vcTrees = @('v180', 'v170', 'v160')
           $toolset = $null
-          foreach ($v in $candidates) {
-            $probe = Join-Path $installPath "MSBuild\Microsoft\VC\v170\Platforms\x64\PlatformToolsets\$v\Toolset.props"
-            if (Test-Path $probe) { $toolset = $v; break }
+          foreach ($vcTree in $vcTrees) {
+            foreach ($v in $candidates) {
+              $probe = Join-Path $installPath "MSBuild\Microsoft\VC\$vcTree\Platforms\x64\PlatformToolsets\$v\Toolset.props"
+              if (Test-Path $probe) { $toolset = $v; break }
+            }
+            if ($toolset) { break }
           }
           if (-not $toolset) {
             Write-Error "No supported MSVC toolset found (v145/v143/v142)"
