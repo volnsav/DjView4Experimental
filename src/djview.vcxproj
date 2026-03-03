@@ -27,7 +27,11 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="&apos;$(Configuration)&apos;==&apos;Debug&apos;" Label="Configuration">
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset Condition="'$(PlatformToolset)'=='' and '$(VisualStudioVersion)'=='16.0'">v142</PlatformToolset>
+    <PlatformToolset Condition="'$(PlatformToolset)'=='' and '$(VisualStudioVersion)'=='17.0'">v143</PlatformToolset>
+    <PlatformToolset Condition="'$(PlatformToolset)'=='' and '$(VisualStudioVersion)'=='18.0' and Exists('$(VCTargetsPath)\Platforms\$(Platform)\PlatformToolsets\v145\Toolset.props')">v145</PlatformToolset>
+    <PlatformToolset Condition="'$(PlatformToolset)'=='' and '$(VisualStudioVersion)'=='18.0'">v143</PlatformToolset>
+    <PlatformToolset Condition="'$(PlatformToolset)'==''">v143</PlatformToolset>
     <OutputDirectory>debug\</OutputDirectory>
     <ATLMinimizesCRunTimeLibraryUsage>false</ATLMinimizesCRunTimeLibraryUsage>
     <CharacterSet>NotSet</CharacterSet>
@@ -36,7 +40,11 @@
     <PrimaryOutput>djview</PrimaryOutput>
   </PropertyGroup>
   <PropertyGroup Condition="&apos;$(Configuration)&apos;==&apos;Release&apos;" Label="Configuration">
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset Condition="'$(PlatformToolset)'=='' and '$(VisualStudioVersion)'=='16.0'">v142</PlatformToolset>
+    <PlatformToolset Condition="'$(PlatformToolset)'=='' and '$(VisualStudioVersion)'=='17.0'">v143</PlatformToolset>
+    <PlatformToolset Condition="'$(PlatformToolset)'=='' and '$(VisualStudioVersion)'=='18.0' and Exists('$(VCTargetsPath)\Platforms\$(Platform)\PlatformToolsets\v145\Toolset.props')">v145</PlatformToolset>
+    <PlatformToolset Condition="'$(PlatformToolset)'=='' and '$(VisualStudioVersion)'=='18.0'">v143</PlatformToolset>
+    <PlatformToolset Condition="'$(PlatformToolset)'==''">v143</PlatformToolset>
     <OutputDirectory>release\</OutputDirectory>
     <ATLMinimizesCRunTimeLibraryUsage>false</ATLMinimizesCRunTimeLibraryUsage>
     <CharacterSet>NotSet</CharacterSet>
@@ -54,6 +62,8 @@
   </ImportGroup>
     <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
+    <DjvuPlatformToolset Condition="'$(DjvuPlatformToolset)'=='' and '$(DJVU_PLATFORM_TOOLSET)'!=''">$(DJVU_PLATFORM_TOOLSET)</DjvuPlatformToolset>
+    <DjvuPlatformToolset Condition="'$(DjvuPlatformToolset)'==''">$(PlatformToolset)</DjvuPlatformToolset>
     <DjvuRoot Condition="'$(DjvuRoot)'=='' and '$(DJVU_ROOT)'!=''">$(DJVU_ROOT)</DjvuRoot>
     <DjvuRoot Condition="'$(DjvuRoot)'==''">$(MSBuildThisFileDirectory)..\..\DjVuLibreExperimental</DjvuRoot>
     <DjvuRootFwd>$([System.String]::Copy('$(DjvuRoot)').Replace('\\','/'))</DjvuRootFwd>
@@ -120,7 +130,7 @@
       <WarningLevel>0</WarningLevel>
     </Midl>
     <PreBuildEvent>
-      <Command>&quot;$(MSBuildExePath)&quot; &quot;$(DjvuRoot)\windows\djvulibre\djvulibre.sln&quot; /m /t:libdjvulibre /p:Configuration=$(Configuration) /p:Platform=$(Platform) /p:DjvuPlatformToolset=v145</Command>
+      <Command>&quot;$(MSBuildExePath)&quot; &quot;$(DjvuRoot)\windows\djvulibre\djvulibre.sln&quot; /m /t:libdjvulibre /p:Configuration=$(Configuration) /p:Platform=$(Platform) /p:DjvuPlatformToolset=$(DjvuPlatformToolset)</Command>
     </PreBuildEvent>
     <ResourceCompile>
       <PreprocessorDefinitions>_WINDOWS;UNICODE;_UNICODE;WIN32;_ENABLE_EXTENDED_ALIGNED_STORAGE;WITH_DJVIEWPLUGIN;QT_PRINTSUPPORT_LIB;QT_WIDGETS_LIB;QT_OPENGLWIDGETS_LIB;QT_OPENGL_LIB;QT_GUI_LIB;QT_NETWORK_LIB;QT_CORE_LIB;_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -168,7 +178,7 @@
       <WarningLevel>0</WarningLevel>
     </Midl>
     <PreBuildEvent>
-      <Command>&quot;$(MSBuildExePath)&quot; &quot;$(DjvuRoot)\windows\djvulibre\djvulibre.sln&quot; /m /t:libdjvulibre /p:Configuration=$(Configuration) /p:Platform=$(Platform) /p:DjvuPlatformToolset=v145</Command>
+      <Command>&quot;$(MSBuildExePath)&quot; &quot;$(DjvuRoot)\windows\djvulibre\djvulibre.sln&quot; /m /t:libdjvulibre /p:Configuration=$(Configuration) /p:Platform=$(Platform) /p:DjvuPlatformToolset=$(DjvuPlatformToolset)</Command>
     </PreBuildEvent>
     <ResourceCompile>
       <PreprocessorDefinitions>_WINDOWS;UNICODE;_UNICODE;WIN32;_ENABLE_EXTENDED_ALIGNED_STORAGE;NDEBUG;QT_NO_DEBUG;QT_NO_DEBUG_STREAM;WITH_DJVIEWPLUGIN;NDEBUG;QT_NO_DEBUG;QT_PRINTSUPPORT_LIB;QT_WIDGETS_LIB;QT_OPENGLWIDGETS_LIB;QT_OPENGL_LIB;QT_GUI_LIB;QT_NETWORK_LIB;QT_CORE_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>

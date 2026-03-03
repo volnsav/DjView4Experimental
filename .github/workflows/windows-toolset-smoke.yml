@@ -23,6 +23,8 @@ jobs:
   smoke:
     name: Smoke ${{ matrix.config }} x64
     runs-on: windows-latest
+    env:
+      DJVU_PLATFORM_TOOLSET: v143
     strategy:
       fail-fast: false
       matrix:
@@ -48,6 +50,12 @@ jobs:
       - name: Setup MSBuild
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         uses: microsoft/setup-msbuild@v2
+
+      - name: Sanitize MSVC toolset env
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        shell: pwsh
+        run: |
+          Remove-Item Env:VCVARS_VER -ErrorAction SilentlyContinue
 
       - name: Setup vcpkg
         if: ${{ steps.mode_filter.outputs.run == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.with_vcpkg == 'true') }}
@@ -81,42 +89,6 @@ jobs:
           )
           .\vcpkg\vcpkg.exe --vcpkg-root "$env:GITHUB_WORKSPACE\vcpkg" install --overlay-triplets=.github/vcpkg-triplets @packages
 
-      - name: Detect MSVC toolset
-        if: ${{ steps.mode_filter.outputs.run == 'true' }}
-        id: toolset
-        shell: pwsh
-        run: |
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
-          if (-not (Test-Path $vswhere)) {
-            Write-Error "vswhere.exe not found"
-            exit 1
-          }
-          $installPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
-          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($installPath)) {
-            Write-Error "Failed to detect Visual Studio installation path"
-            exit 1
-          }
-
-          $candidates = @('v145', 'v143', 'v142')
-          $vcTrees = @('v180', 'v170', 'v160')
-          $toolset = $null
-
-          foreach ($vcTree in $vcTrees) {
-            foreach ($v in $candidates) {
-              $probe = Join-Path $installPath "MSBuild\Microsoft\VC\$vcTree\Platforms\x64\PlatformToolsets\$v\Toolset.props"
-              if (Test-Path $probe) { $toolset = $v; break }
-            }
-            if ($toolset) { break }
-          }
-
-          if (-not $toolset) {
-            Write-Error "No supported MSVC toolset found (v145/v143/v142)"
-            exit 1
-          }
-
-          "toolset=$toolset" >> $env:GITHUB_OUTPUT
-          Write-Host "Detected toolset: $toolset"
-
       - name: Build smoke project
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         shell: pwsh
@@ -125,7 +97,7 @@ jobs:
             /m `
             /p:Configuration=${{ matrix.config }} `
             /p:Platform=x64 `
-            /p:PlatformToolset=${{ steps.toolset.outputs.toolset }}
+            /p:PlatformToolset=${{ env.DJVU_PLATFORM_TOOLSET }}
 
       - name: Upload smoke binary
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
