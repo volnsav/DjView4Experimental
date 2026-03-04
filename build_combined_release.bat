@@ -113,6 +113,37 @@ if not defined LRELEASE_EXE (
     if not defined LRELEASE_EXE set "LRELEASE_EXE=%%~fI"
   )
 )
+set "MOC_EXE="
+for %%P in (
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\Qt6\bin\moc.exe"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\qt6\bin\moc.exe"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\qttools\bin\moc.exe"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\QtTools\bin\moc.exe"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\Qt5\bin\moc.exe"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\qt5\bin\moc.exe"
+) do (
+  if not defined MOC_EXE if exist "%%~fP" set "MOC_EXE=%%~fP"
+)
+
+if not defined MOC_EXE (
+  for /f "delims=" %%I in ('where moc.exe 2^>nul') do (
+    if not defined MOC_EXE set "MOC_EXE=%%~fI"
+  )
+)
+
+if not defined MOC_EXE (
+  echo ERROR: moc.exe not found for host triplet "%VCPKG_HOST_TRIPLET%".
+  echo        Install Qt tools in vcpkg, for example: qttools:%VCPKG_HOST_TRIPLET%
+  exit /b 1
+)
+if not exist "%MOC_EXE%" (
+  echo ERROR: moc.exe path is invalid: "%MOC_EXE%"
+  exit /b 1
+)
+
+rem Ensure moc.exe is reachable for MSBuild CustomBuild steps
+for %%D in ("%MOC_EXE%") do set "MOC_BIN_DIR=%%~dpD"
+set "PATH=%MOC_BIN_DIR%;%PATH%"
 set "QT_TRANSLATIONS_DIR=%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\translations\Qt6"
 if not exist "%QT_TRANSLATIONS_DIR%" if exist "%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\translations\qt6" set "QT_TRANSLATIONS_DIR=%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\translations\qt6"
 set "QT_PLUGIN_DIR_REL=%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\Qt6\plugins"
