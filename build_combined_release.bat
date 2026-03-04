@@ -113,37 +113,32 @@ if not defined LRELEASE_EXE (
     if not defined LRELEASE_EXE set "LRELEASE_EXE=%%~fI"
   )
 )
-set "MOC_EXE="
+set "QT_TOOLS_BIN="
 for %%P in (
-  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\Qt6\bin\moc.exe"
-  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\qt6\bin\moc.exe"
-  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\qttools\bin\moc.exe"
-  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\QtTools\bin\moc.exe"
-  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\Qt5\bin\moc.exe"
-  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\qt5\bin\moc.exe"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\Qt6\bin"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\qt6\bin"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\qtbase\bin"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\QtBase\bin"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\qttools\bin"
+  "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\QtTools\bin"
 ) do (
-  if not defined MOC_EXE if exist "%%~fP" set "MOC_EXE=%%~fP"
+  if not defined QT_TOOLS_BIN if exist "%%~fP\moc.exe" if exist "%%~fP\uic.exe" if exist "%%~fP\rcc.exe" set "QT_TOOLS_BIN=%%~fP"
 )
-
-if not defined MOC_EXE (
+if not defined QT_TOOLS_BIN (
   for /f "delims=" %%I in ('where moc.exe 2^>nul') do (
-    if not defined MOC_EXE set "MOC_EXE=%%~fI"
+    if not defined QT_TOOLS_BIN for %%D in ("%%~dpI.") do (
+      if exist "%%~fD\uic.exe" if exist "%%~fD\rcc.exe" set "QT_TOOLS_BIN=%%~fD"
+    )
   )
 )
-
-if not defined MOC_EXE (
-  echo ERROR: moc.exe not found for host triplet "%VCPKG_HOST_TRIPLET%".
-  echo        Install Qt tools in vcpkg, for example: qttools:%VCPKG_HOST_TRIPLET%
+if not defined QT_TOOLS_BIN (
+  echo ERROR: Qt tools not found ^(moc.exe/uic.exe/rcc.exe^) for host triplet "%VCPKG_HOST_TRIPLET%".
+  echo        Checked under "%VCPKG_ROOT%\installed\%VCPKG_HOST_TRIPLET%\tools\*".
+  echo        Install qtbase:%VCPKG_HOST_TRIPLET% ^(and optionally qttools:%VCPKG_HOST_TRIPLET%^).
   exit /b 1
 )
-if not exist "%MOC_EXE%" (
-  echo ERROR: moc.exe path is invalid: "%MOC_EXE%"
-  exit /b 1
-)
-
-rem Ensure moc.exe is reachable for MSBuild CustomBuild steps
-for %%D in ("%MOC_EXE%") do set "MOC_BIN_DIR=%%~dpD"
-set "PATH=%MOC_BIN_DIR%;%PATH%"
+if not defined LRELEASE_EXE if exist "%QT_TOOLS_BIN%\lrelease.exe" set "LRELEASE_EXE=%QT_TOOLS_BIN%\lrelease.exe"
+set "PATH=%QT_TOOLS_BIN%;%PATH%"
 set "QT_TRANSLATIONS_DIR=%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\translations\Qt6"
 if not exist "%QT_TRANSLATIONS_DIR%" if exist "%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\translations\qt6" set "QT_TRANSLATIONS_DIR=%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\translations\qt6"
 set "QT_PLUGIN_DIR_REL=%VCPKG_ROOT%\installed\%VCPKG_TRIPLET%\Qt6\plugins"
@@ -254,11 +249,14 @@ if not exist "%LRELEASE_EXE%" (
 )
 
 if defined VCVARS_VER (
+  set "RESOLVED_VCPKG_ROOT=%VCPKG_ROOT%"
   call "%VCVARS%" -vcvars_ver=%VCVARS_VER%
 ) else (
+  set "RESOLVED_VCPKG_ROOT=%VCPKG_ROOT%"
   call "%VCVARS%"
 )
 if errorlevel 1 exit /b 1
+set "VCPKG_ROOT=%RESOLVED_VCPKG_ROOT%"
 if not defined DJVU_PLATFORM_TOOLSET call :select_djvu_toolset || exit /b 1
 if defined DJVU_PLATFORM_TOOLSET (
   set "MSBUILD_TOOLSET_ARGS=/p:PlatformToolset=%DJVU_PLATFORM_TOOLSET% /p:DjvuPlatformToolset=%DJVU_PLATFORM_TOOLSET%"
