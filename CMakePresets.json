@@ -17,40 +17,27 @@
     },
 
     {
-      "name": "windows-x64-release",
-      "displayName": "Windows x64 Release",
-      "description": "MSVC Release build with Qt6 via vcpkg",
+      "name": "windows-x64",
+      "displayName": "Windows x64",
+      "description": "MSVC x64 build with Qt6 via vcpkg (Debug + Release)",
       "inherits": "_vcpkg",
-      "binaryDir": "${sourceDir}/build/win-x64-release",
-      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/win-x64",
+      "generator": "Visual Studio 18 2026",
+      "architecture": { "value": "x64", "strategy": "set" },
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE":    "Release",
-        "VCPKG_TARGET_TRIPLET": "x64-windows-release"
-      }
-    },
-    {
-      "name": "windows-x64-debug",
-      "displayName": "Windows x64 Debug",
-      "description": "MSVC Debug build with Qt6 via vcpkg",
-      "inherits": "_vcpkg",
-      "binaryDir": "${sourceDir}/build/win-x64-debug",
-      "generator": "Ninja",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE":    "Debug",
         "VCPKG_TARGET_TRIPLET": "x64-windows"
       }
     },
     {
-      "name": "windows-arm64-release",
-      "displayName": "Windows ARM64 Release",
-      "description": "MSVC ARM64 Release build with Qt6 via vcpkg",
+      "name": "windows-arm64",
+      "displayName": "Windows ARM64",
+      "description": "MSVC ARM64 build with Qt6 via vcpkg (Debug + Release)",
       "inherits": "_vcpkg",
-      "binaryDir": "${sourceDir}/build/win-arm64-release",
-      "generator": "Ninja",
-      "architecture": { "value": "arm64", "strategy": "external" },
+      "binaryDir": "${sourceDir}/build/win-arm64",
+      "generator": "Visual Studio 18 2026",
+      "architecture": { "value": "arm64", "strategy": "set" },
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE":    "Release",
-        "VCPKG_TARGET_TRIPLET": "arm64-windows-release"
+        "VCPKG_TARGET_TRIPLET": "arm64-windows"
       }
     },
 
@@ -81,28 +68,31 @@
   "buildPresets": [
     {
       "name": "windows-x64-release",
-      "configurePreset": "windows-x64-release",
-      "displayName": "Build Windows x64 Release"
+      "displayName": "Build Windows x64 Release",
+      "configurePreset": "windows-x64",
+      "configuration": "Release"
     },
     {
       "name": "windows-x64-debug",
-      "configurePreset": "windows-x64-debug",
-      "displayName": "Build Windows x64 Debug"
+      "displayName": "Build Windows x64 Debug",
+      "configurePreset": "windows-x64",
+      "configuration": "Debug"
     },
     {
       "name": "windows-arm64-release",
-      "configurePreset": "windows-arm64-release",
-      "displayName": "Build Windows ARM64 Release"
+      "displayName": "Build Windows ARM64 Release",
+      "configurePreset": "windows-arm64",
+      "configuration": "Release"
     },
     {
       "name": "linux-x64-release",
-      "configurePreset": "linux-x64-release",
-      "displayName": "Build Linux x64 Release"
+      "displayName": "Build Linux x64 Release",
+      "configurePreset": "linux-x64-release"
     },
     {
       "name": "linux-x64-debug",
-      "configurePreset": "linux-x64-debug",
-      "displayName": "Build Linux x64 Debug"
+      "displayName": "Build Linux x64 Debug",
+      "configurePreset": "linux-x64-debug"
     }
   ]
 }
