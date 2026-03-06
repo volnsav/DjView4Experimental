@@ -1,5 +1,5 @@
 %define release 1
-%define version 4.12
+%define version 4.13
 
 Summary: DjVu viewer
 Name: djview4
@@ -47,6 +47,9 @@ rm -rf %{buildroot}
 %{_mandir}/man1/
 
 %changelog
+* Fri Mar 06 2026 Volodymyr <volnsav@github> 4.13-1
+- Version 4.13: Qt6 migration, tabbed document window, dark-theme rendering fix
+- CMake-only build system; drop autotools/qmake legacy
 * Mon Jun 09 2025 Volodymyr <volnsav@github> 4.12-1
 - Migrated build system from autotools/qmake to CMake 3.21+
 - Dropped NPAPI browser plugin (npdjvu, nsdejavu)
