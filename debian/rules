@@ -24,5 +24,9 @@ override_dh_auto_install:
 	mv debian/djview4/usr/bin/djview debian/djview4/usr/bin/djview4
 	mv debian/djview4/usr/share/man/man1/djview.1 debian/djview4/usr/share/man/man1/djview4.1
 
+# dh_auto_install already populated debian/djview4/ directly (single binary
+# package); there is nothing left for dh_install to do.
+override_dh_install:
+
 override_dh_installchangelogs:
 	dh_installchangelogs NEWS

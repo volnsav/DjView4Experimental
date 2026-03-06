@@ -1,6 +1,2 @@
-usr/bin/djview4
-usr/share/man/*/djview4.*
-usr/share/djvu
-usr/share/icons
-usr/share/applications
-debian/djvulibre-djview4.xpm usr/share/icons/hicolor/32x32/apps/
+# dh_install is overridden to a no-op: dh_auto_install (CMake install)
+# places all files directly into debian/djview4/ for the single binary package.
