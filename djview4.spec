@@ -39,7 +39,7 @@ based on the DjVuLibre library and the Qt6 toolkit.
 rm -rf %{buildroot}
 
 %files
-%doc README COPYRIGHT COPYING NEWS
+%doc README.md COPYRIGHT COPYING NEWS
 %{_bindir}/djview
 %{_datadir}/djvu/
 %{_datadir}/applications/
