@@ -105,6 +105,11 @@ endif()
 # ---------------------------------------------------------------------------
 add_executable(djview WIN32 ${DJVIEW_SOURCES})
 add_dependencies(djview djview_git_info)
+# Ensure the generated header is built before any source file that includes it.
+# Listing it as HEADER_FILE_ONLY in target_sources creates the correct per-TU
+# dependency so parallel make (-jN) doesn't race against the custom command.
+target_sources(djview PRIVATE "${_git_info_out}")
+set_source_files_properties("${_git_info_out}" PROPERTIES HEADER_FILE_ONLY TRUE)
 
 if(DJVIEW_BUILD_TRANSLATIONS AND QM_FILES)
     # Make sure translations are built as part of the main target.
