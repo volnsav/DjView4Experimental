@@ -18,16 +18,18 @@ endif()
 set(_git_info_out "${CMAKE_CURRENT_BINARY_DIR}/build_git_info.h")
 set(_git_info_script "${CMAKE_SOURCE_DIR}/cmake/GenerateBuildGitInfo.cmake")
 
-# Generate the header at configure time so it exists before compilation starts.
-# (Avoids parallel-make races where the custom-command hasn't fired yet.)
-execute_process(
-    COMMAND "${CMAKE_COMMAND}"
-            -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
-            -DDJVU_SOURCE_DIR="${DJVIEW_DJVU_SOURCE_DIR}"
-            -DOUTPUT_FILE="${_git_info_out}"
-            -P "${_git_info_script}"
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+# Generate a minimal build_git_info.h at configure time (inline cmake code)
+# so the header exists before any compilation unit needs it.
+# The custom command below will overwrite it with actual git refs at build time.
+if(NOT EXISTS "${_git_info_out}")
+    file(WRITE "${_git_info_out}"
+"#ifndef BUILD_GIT_INFO_H\n"
+"#define BUILD_GIT_INFO_H\n"
+"#define DJVIEW_APP_GIT_REF \"unknown\"\n"
+"#define DJVIEW_LIB_GIT_REF \"unknown\"\n"
+"#endif\n"
 )
+endif()
 
 # Also regenerate at build time so incremental rebuilds pick up git changes.
 add_custom_command(
