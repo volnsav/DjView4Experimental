@@ -18,6 +18,18 @@ endif()
 set(_git_info_out "${CMAKE_CURRENT_BINARY_DIR}/build_git_info.h")
 set(_git_info_script "${CMAKE_SOURCE_DIR}/cmake/GenerateBuildGitInfo.cmake")
 
+# Generate the header at configure time so it exists before compilation starts.
+# (Avoids parallel-make races where the custom-command hasn't fired yet.)
+execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+            -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
+            -DDJVU_SOURCE_DIR="${DJVIEW_DJVU_SOURCE_DIR}"
+            -DOUTPUT_FILE="${_git_info_out}"
+            -P "${_git_info_script}"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+# Also regenerate at build time so incremental rebuilds pick up git changes.
 add_custom_command(
     OUTPUT  "${_git_info_out}"
     COMMAND "${CMAKE_COMMAND}"
@@ -26,7 +38,7 @@ add_custom_command(
             -DOUTPUT_FILE="${_git_info_out}"
             -P "${_git_info_script}"
     DEPENDS "${_git_info_script}"
-    COMMENT "Generating build_git_info.h"
+    COMMENT "Updating build_git_info.h"
     VERBATIM)
 
 add_custom_target(djview_git_info DEPENDS "${_git_info_out}")
@@ -105,11 +117,6 @@ endif()
 # ---------------------------------------------------------------------------
 add_executable(djview WIN32 ${DJVIEW_SOURCES})
 add_dependencies(djview djview_git_info)
-# Ensure the generated header is built before any source file that includes it.
-# Listing it as HEADER_FILE_ONLY in target_sources creates the correct per-TU
-# dependency so parallel make (-jN) doesn't race against the custom command.
-target_sources(djview PRIVATE "${_git_info_out}")
-set_source_files_properties("${_git_info_out}" PROPERTIES HEADER_FILE_ONLY TRUE)
 
 if(DJVIEW_BUILD_TRANSLATIONS AND QM_FILES)
     # Make sure translations are built as part of the main target.
