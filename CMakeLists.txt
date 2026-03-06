@@ -91,3 +91,133 @@ message(STATUS "DjView4: DjVuLibre found")
 # Subdirectories
 # ---------------------------------------------------------------------------
 add_subdirectory(src)
+
+# ---------------------------------------------------------------------------
+# Optional: bundle DjVuLibre runtime into the install tree
+# ---------------------------------------------------------------------------
+# Set DJVIEW_BUNDLE_DJVU_DEPS=ON together with DJVIEW_DJVU_INSTALL_DIR when
+# building a standalone installer so the DjVuLibre shared library (and any
+# of its own shared dependencies: libjpeg, libtiff, zlib on Windows) are
+# copied next to djview.exe / djview.
+#
+option(DJVIEW_BUNDLE_DJVU_DEPS
+    "Copy DjVuLibre runtime (and its deps) from DJVIEW_DJVU_INSTALL_DIR into the install tree"
+    OFF)
+
+if(DJVIEW_BUNDLE_DJVU_DEPS AND DJVIEW_DJVU_INSTALL_DIR)
+    if(WIN32)
+        file(GLOB _djvu_runtime_dlls
+             "${DJVIEW_DJVU_INSTALL_DIR}/bin/libdjvulibre.dll"
+             "${DJVIEW_DJVU_INSTALL_DIR}/bin/libjpeg*.dll"
+             "${DJVIEW_DJVU_INSTALL_DIR}/bin/libtiff*.dll"
+             "${DJVIEW_DJVU_INSTALL_DIR}/bin/zlib*.dll"
+             "${DJVIEW_DJVU_INSTALL_DIR}/bin/zlibd*.dll"
+             "${DJVIEW_DJVU_INSTALL_DIR}/bin/lzma*.dll"
+             "${DJVIEW_DJVU_INSTALL_DIR}/bin/deflatd*.dll"
+             "${DJVIEW_DJVU_INSTALL_DIR}/bin/deflate*.dll"
+             "${DJVIEW_DJVU_INSTALL_DIR}/bin/lerc*.dll")
+        if(_djvu_runtime_dlls)
+            install(FILES ${_djvu_runtime_dlls}
+                    DESTINATION "${CMAKE_INSTALL_BINDIR}"
+                    COMPONENT Runtime)
+        endif()
+    else()
+        file(GLOB _djvu_runtime_libs
+             "${DJVIEW_DJVU_INSTALL_DIR}/lib/libdjvulibre.so*"
+             "${DJVIEW_DJVU_INSTALL_DIR}/lib/libdjvulibre*.dylib")
+        if(_djvu_runtime_libs)
+            install(FILES ${_djvu_runtime_libs}
+                    DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+                    COMPONENT Runtime)
+        endif()
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# Qt deployment (Windows only): run windeployqt at install time so all
+# required Qt DLLs / plugins end up next to djview.exe.
+# This is invoked automatically when building the CPack package.
+# ---------------------------------------------------------------------------
+if(WIN32 AND QT_VERSION_MAJOR EQUAL 6)
+    # Locate windeployqt – it lives under the active vcpkg triplet's tool dir.
+    find_program(WINDEPLOYQT_EXECUTABLE
+        NAMES windeployqt windeployqt6
+        HINTS
+            "$ENV{VCPKG_ROOT}/installed/x64-windows-release/tools/qt6/bin"
+            "$ENV{VCPKG_ROOT}/installed/x64-windows/tools/qt6/bin"
+            "$ENV{VCPKG_ROOT}/installed/arm64-windows-release/tools/qt6/bin"
+            "$ENV{VCPKG_ROOT}/installed/arm64-windows/tools/qt6/bin"
+            "${Qt6_DIR}/../../../bin"
+    )
+
+    if(WINDEPLOYQT_EXECUTABLE)
+        message(STATUS "DjView4: found windeployqt at ${WINDEPLOYQT_EXECUTABLE}")
+        # The install(CODE) block runs at 'cmake --install' / 'cpack' time.
+        install(CODE "
+            message(STATUS \"Running windeployqt...\")
+            execute_process(
+                COMMAND \"${WINDEPLOYQT_EXECUTABLE}\"
+                    --no-translations
+                    --no-compiler-runtime
+                    \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/djview.exe\"
+                RESULT_VARIABLE _wdqt_result
+            )
+            if(NOT _wdqt_result EQUAL 0)
+                message(WARNING \"windeployqt returned \${_wdqt_result}\")
+            endif()
+        " COMPONENT Runtime)
+    else()
+        message(STATUS "DjView4: windeployqt not found – Qt DLLs will NOT be deployed automatically")
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# CPack – combined installer
+# ---------------------------------------------------------------------------
+# Windows: generates both a NSIS installer (.exe) and a ZIP archive.
+# Linux:   generates a TGZ archive.
+#
+# Workflow to produce a combined DjView4 + DjVuLibre installer:
+#
+#   cmake -S . -B build \
+#         -DDJVIEW_DJVU_INSTALL_DIR=<djvulibre-prefix> \
+#         -DDJVIEW_BUNDLE_DJVU_DEPS=ON
+#   cmake --build build --config Release
+#   cmake --install build --config Release --prefix build/_pkg
+#   cd build && cpack -G NSIS   (Windows)
+#              cpack -G TGZ    (Linux)
+#
+set(CPACK_PACKAGE_NAME              "DjView4")
+set(CPACK_PACKAGE_VENDOR            "DjVuLibre")
+set(CPACK_PACKAGE_VERSION           "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "DjView4 – DjVu document viewer")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "DjView4")
+set(CPACK_RESOURCE_FILE_LICENSE     "${CMAKE_CURRENT_SOURCE_DIR}/COPYING")
+
+if(WIN32)
+    set(CPACK_GENERATOR "ZIP;NSIS")
+    set(CPACK_NSIS_DISPLAY_NAME           "DjView4 ${PROJECT_VERSION}")
+    set(CPACK_NSIS_PACKAGE_NAME           "DjView4")
+    set(CPACK_NSIS_MODIFY_PATH            ON)
+    set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+    # Register .djvu / .djv file association
+    set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS [[
+      WriteRegStr HKCR ".djvu" "" "DjVu.Document"
+      WriteRegStr HKCR ".djv"  "" "DjVu.Document"
+      WriteRegStr HKCR "DjVu.Document" "" "DjVu Document"
+      WriteRegStr HKCR "DjVu.Document\shell\open\command" "" '"$INSTDIR\bin\djview.exe" "%1"'
+    ]])
+    set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS [[
+      DeleteRegKey HKCR ".djvu"
+      DeleteRegKey HKCR ".djv"
+      DeleteRegKey HKCR "DjVu.Document"
+    ]])
+else()
+    set(CPACK_GENERATOR "TGZ")
+endif()
+
+set(CPACK_SOURCE_IGNORE_FILES
+    "/build/;/build-.*/;/\\\\.git/;/autom4te\\\\.cache/;/vcpkg/")
+
+include(CPack)

@@ -3,6 +3,37 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
 # ---------------------------------------------------------------------------
+# build_git_info.h  – generated at every build from git describe
+# ---------------------------------------------------------------------------
+# Optional: set DJVIEW_DJVU_SOURCE_DIR to the DjVuLibreExperimental checkout;
+# if not set we try the sibling directory ../DjVuLibreExperimental.
+if(NOT DJVIEW_DJVU_SOURCE_DIR)
+    get_filename_component(_djvu_sibling
+        "${CMAKE_SOURCE_DIR}/../DjVuLibreExperimental" ABSOLUTE)
+    if(IS_DIRECTORY "${_djvu_sibling}")
+        set(DJVIEW_DJVU_SOURCE_DIR "${_djvu_sibling}")
+    endif()
+endif()
+
+set(_git_info_out "${CMAKE_CURRENT_BINARY_DIR}/build_git_info.h")
+set(_git_info_script "${CMAKE_SOURCE_DIR}/cmake/GenerateBuildGitInfo.cmake")
+
+add_custom_command(
+    OUTPUT  "${_git_info_out}"
+    COMMAND "${CMAKE_COMMAND}"
+            -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
+            -DDJVU_SOURCE_DIR="${DJVIEW_DJVU_SOURCE_DIR}"
+            -DOUTPUT_FILE="${_git_info_out}"
+            -P "${_git_info_script}"
+    DEPENDS "${_git_info_script}"
+    COMMENT "Generating build_git_info.h"
+    VERBATIM)
+
+add_custom_target(djview_git_info DEPENDS "${_git_info_out}")
+# Make the generated header visible to sources
+include_directories("${CMAKE_CURRENT_BINARY_DIR}")
+
+# ---------------------------------------------------------------------------
 # Sources identical to those in djview.pro
 # ---------------------------------------------------------------------------
 set(DJVIEW_SOURCES
@@ -73,6 +104,7 @@ endif()
 # Executable
 # ---------------------------------------------------------------------------
 add_executable(djview WIN32 ${DJVIEW_SOURCES})
+add_dependencies(djview djview_git_info)
 
 if(DJVIEW_BUILD_TRANSLATIONS AND QM_FILES)
     # Make sure translations are built as part of the main target.
@@ -92,8 +124,13 @@ target_link_libraries(djview PRIVATE
 # ---------------------------------------------------------------------------
 # DjVuLibre
 # ---------------------------------------------------------------------------
+# DjVuLibreExperimental CMake config exports DjVuLibre::djvulibre (lowercase).
+# The pkg-config fallback in the root CMakeLists creates DjVuLibre::DjVuLibre.
+# Handle both so the build works regardless of how DjVuLibre was found.
 if(TARGET DjVuLibre::DjVuLibre)
     target_link_libraries(djview PRIVATE DjVuLibre::DjVuLibre)
+elseif(TARGET DjVuLibre::djvulibre)
+    target_link_libraries(djview PRIVATE DjVuLibre::djvulibre)
 elseif(TARGET djvulibre)
     target_link_libraries(djview PRIVATE djvulibre)
 endif()
