@@ -13,12 +13,7 @@
       "name": "_vcpkg",
       "hidden": true,
       "inherits": "_base",
-      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-      "condition": {
-        "type": "notEquals",
-        "lhs": "$env{VCPKG_ROOT}",
-        "rhs": ""
-      }
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
     },
 
     {
