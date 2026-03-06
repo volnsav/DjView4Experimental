@@ -21,8 +21,8 @@ override_dh_auto_configure:
 override_dh_auto_install:
 	dh_auto_install
 	@echo "rename djview as djview4 to allow debian alternatives"
-	mv debian/tmp/usr/bin/djview debian/tmp/usr/bin/djview4
-	mv debian/tmp/usr/share/man/man1/djview.1 debian/tmp/usr/share/man/man1/djview4.1
+	mv debian/djview4/usr/bin/djview debian/djview4/usr/bin/djview4
+	mv debian/djview4/usr/share/man/man1/djview.1 debian/djview4/usr/share/man/man1/djview4.1
 
 override_dh_installchangelogs:
 	dh_installchangelogs NEWS
