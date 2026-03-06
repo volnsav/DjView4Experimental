@@ -521,6 +521,21 @@ main(int argc, char *argv[])
   if (qi < qargv.size() - 1)
     usage();
 
+  // Restore last saved session when no document is specified on command line.
+  if (qi >= qargv.size())
+    {
+      QSettings s;
+      s.beginGroup("last_session");
+      int windows = s.value("windows").toInt();
+      if (windows > 0)
+        {
+          s.beginGroup("1");
+          main->restoreSession(&s);
+          s.endGroup();
+        }
+      s.endGroup();
+    }
+
   // Open file
   if (qi == qargv.size() - 1)
     {

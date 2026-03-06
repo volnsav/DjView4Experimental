@@ -51,12 +51,7 @@ if /I "%BUILD_PLATFORM%"=="x64" (
 set "OUTDIR=%ROOT%build\%BUILD_CONFIG%_%BUILD_PLATFORM_DIR%_strict"
 set "MSBUILD_PARALLEL=/m"
 if defined MSBUILD_MAXCPU set "MSBUILD_PARALLEL=/m:%MSBUILD_MAXCPU%"
-rem Do not infer PlatformToolset from VCVARS_VER:
-rem keep toolset selection automatic via current VS/MSBuild defaults.
 set "MSBUILD_TOOLSET_ARGS="
-if defined DJVU_PLATFORM_TOOLSET (
-  set "MSBUILD_TOOLSET_ARGS=/p:PlatformToolset=%DJVU_PLATFORM_TOOLSET% /p:DjvuPlatformToolset=%DJVU_PLATFORM_TOOLSET%"
-)
 
 if not defined DJVU_ROOT set "DJVU_ROOT=%ROOT%..\DjVuLibreExperimental"
 for %%I in ("%DJVU_ROOT%") do set "DJVU_ROOT=%%~fI"
@@ -233,6 +228,10 @@ if defined VCVARS_VER (
   call "%VCVARS%"
 )
 if errorlevel 1 exit /b 1
+if not defined DJVU_PLATFORM_TOOLSET call :select_djvu_toolset || exit /b 1
+if defined DJVU_PLATFORM_TOOLSET (
+  set "MSBUILD_TOOLSET_ARGS=/p:PlatformToolset=%DJVU_PLATFORM_TOOLSET% /p:DjvuPlatformToolset=%DJVU_PLATFORM_TOOLSET%"
+)
 
 call :resolve_git_ref "%ROOT_DIR%" APP_GIT_REF
 call :resolve_git_ref "%DJVU_ROOT%" LIB_GIT_REF
@@ -314,6 +313,7 @@ if exist "%QT_TRANSLATIONS_DIR%" (
 
 echo.
 echo Combined build: Configuration=%BUILD_CONFIG% Platform=%BUILD_PLATFORM%
+if defined DJVU_PLATFORM_TOOLSET echo Platform toolset: %DJVU_PLATFORM_TOOLSET%
 echo Combined runtime is ready in: %OUTDIR%
 exit /b 0
 
@@ -347,6 +347,44 @@ if defined VCPKG_BIN_FALLBACK if exist "%VCPKG_BIN_FALLBACK%\%SRC_NAME%" (
 echo ERROR: runtime DLL not found: %SRC_NAME%
 echo        looked in: "%VCPKG_BIN%"
 if defined VCPKG_BIN_FALLBACK echo        and fallback: "%VCPKG_BIN_FALLBACK%"
+exit /b 1
+
+:select_djvu_toolset
+set "TOOLSET_BASE="
+if defined VCTargetsPath if exist "%VCTargetsPath%" set "TOOLSET_BASE=%VCTargetsPath%"
+if not defined TOOLSET_BASE if defined VSINSTALLDIR (
+  for %%V in (v180 v170 v160) do (
+    if not defined TOOLSET_BASE if exist "%VSINSTALLDIR%MSBuild\Microsoft\VC\%%V\Platforms\%BUILD_PLATFORM%\PlatformToolsets" set "TOOLSET_BASE=%VSINSTALLDIR%MSBuild\Microsoft\VC\%%V"
+    if not defined TOOLSET_BASE if exist "%VSINSTALLDIR%MSBuild\Microsoft\VC\%%V\Platforms\%BUILD_PLATFORM_DIR%\PlatformToolsets" set "TOOLSET_BASE=%VSINSTALLDIR%MSBuild\Microsoft\VC\%%V"
+  )
+)
+if not defined TOOLSET_BASE if defined VCToolsInstallDir (
+  set "VSROOT=%VCToolsInstallDir%"
+  for %%I in ("!VSROOT!\..\..\..\..") do set "VSROOT=%%~fI"
+  for %%V in (v180 v170 v160) do (
+    if not defined TOOLSET_BASE if exist "!VSROOT!MSBuild\Microsoft\VC\%%V\Platforms\%BUILD_PLATFORM%\PlatformToolsets" set "TOOLSET_BASE=!VSROOT!MSBuild\Microsoft\VC\%%V"
+    if not defined TOOLSET_BASE if exist "!VSROOT!MSBuild\Microsoft\VC\%%V\Platforms\%BUILD_PLATFORM_DIR%\PlatformToolsets" set "TOOLSET_BASE=!VSROOT!MSBuild\Microsoft\VC\%%V"
+  )
+)
+
+set "TOOLSET_DIR=%TOOLSET_BASE%\Platforms\%BUILD_PLATFORM%\PlatformToolsets"
+if not exist "%TOOLSET_DIR%" set "TOOLSET_DIR=%TOOLSET_BASE%\Platforms\%BUILD_PLATFORM_DIR%\PlatformToolsets"
+if exist "%TOOLSET_DIR%\v145\Toolset.props" (
+  set "DJVU_PLATFORM_TOOLSET=v145"
+  exit /b 0
+)
+if exist "%TOOLSET_DIR%\v143\Toolset.props" (
+  set "DJVU_PLATFORM_TOOLSET=v143"
+  exit /b 0
+)
+if exist "%TOOLSET_DIR%\v142\Toolset.props" (
+  set "DJVU_PLATFORM_TOOLSET=v142"
+  exit /b 0
+)
+echo ERROR: no supported MSVC platform toolset found under "%TOOLSET_DIR%".
+echo        VCTargetsPath="%VCTargetsPath%"
+echo        VSINSTALLDIR="%VSINSTALLDIR%"
+echo        Install v143/v142 build tools or set DJVU_PLATFORM_TOOLSET manually.
 exit /b 1
 
 :prepare_cbt_stamps

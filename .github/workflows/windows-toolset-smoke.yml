@@ -1,0 +1,109 @@
+name: Windows Toolset Smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Smoke profile"
+        required: false
+        default: both
+        type: choice
+        options:
+          - release
+          - debug
+          - both
+      with_vcpkg:
+        description: "Run minimal vcpkg install smoke"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  smoke:
+    name: Smoke ${{ matrix.config }} x64
+    runs-on: windows-latest
+    env:
+      DJVU_PLATFORM_TOOLSET: v143
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Release, Debug]
+
+    steps:
+      - name: Select config by mode
+        id: mode_filter
+        shell: pwsh
+        run: |
+          $mode = '${{ github.event_name == 'workflow_dispatch' && github.event.inputs.mode || 'both' }}'
+          $cfg = '${{ matrix.config }}'
+          $run = $false
+          if ($mode -eq 'both') { $run = $true }
+          elseif ($mode -eq 'release' -and $cfg -eq 'Release') { $run = $true }
+          elseif ($mode -eq 'debug' -and $cfg -eq 'Debug') { $run = $true }
+          "run=$($run.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Checkout
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        uses: actions/checkout@v4
+
+      - name: Setup MSBuild
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Sanitize MSVC toolset env
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        shell: pwsh
+        run: |
+          Remove-Item Env:VCVARS_VER -ErrorAction SilentlyContinue
+
+      - name: Setup vcpkg
+        if: ${{ steps.mode_filter.outputs.run == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.with_vcpkg == 'true') }}
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git vcpkg
+          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Cache vcpkg artifacts
+        if: ${{ steps.mode_filter.outputs.run == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.with_vcpkg == 'true') }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            vcpkg/downloads
+            vcpkg/packages
+            vcpkg/installed
+          key: ${{ runner.os }}-vcpkg-smoke-x64-${{ hashFiles('.github/cache-keys/windows-vcpkg-key.txt', '.github/vcpkg-triplets/*') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-smoke-x64-
+            ${{ runner.os }}-vcpkg-
+
+      - name: Install minimal vcpkg packages
+        if: ${{ steps.mode_filter.outputs.run == 'true' && (github.event_name != 'workflow_dispatch' || github.event.inputs.with_vcpkg == 'true') }}
+        shell: pwsh
+        run: |
+          Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
+          $packages = @(
+            "zlib:x64-windows",
+            "libjpeg-turbo:x64-windows",
+            "zlib:x64-windows-release"
+          )
+          .\vcpkg\vcpkg.exe --vcpkg-root "$env:GITHUB_WORKSPACE\vcpkg" install --overlay-triplets=.github/vcpkg-triplets @packages
+
+      - name: Build smoke project
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        shell: pwsh
+        run: |
+          msbuild .\ci\msbuild-smoke\msbuild_smoke.vcxproj `
+            /m `
+            /p:Configuration=${{ matrix.config }} `
+            /p:Platform=x64 `
+            /p:PlatformToolset=${{ env.DJVU_PLATFORM_TOOLSET }}
+
+      - name: Upload smoke binary
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: msbuild-smoke-${{ matrix.config }}-x64
+          path: |
+            ci/msbuild-smoke/x64/${{ matrix.config }}/msbuild_smoke.exe
+          if-no-files-found: error

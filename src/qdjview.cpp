@@ -86,6 +86,7 @@
 #include <QStyle>
 #include <QStyleOptionComboBox>
 #include <QSysInfo>
+#include <QTabBar>
 #include <QTextDocument>
 #include <QTextStream>
 #include <QTimer>
@@ -487,8 +488,8 @@ QDjView::createActions()
   actionClose = makeAction(tr("&Close", "File|"))
     << QKeySequence(tr("Ctrl+W", "File|Close"))
     << QIcon(":/images/icon_close.png")
-    << tr("Close this window.")
-    << Trigger(this, SLOT(close()));
+    << tr("Close current tab.")
+    << Trigger(this, SLOT(closeCurrentTab()));
 
   actionQuit = makeAction(tr("&Quit", "File|"))
     << QKeySequence(tr("Ctrl+Q", "File|Quit"))
@@ -1540,11 +1541,31 @@ QDjView::saveSession(QSettings *s)
 {
   Saved saved;
   updateSaved(&saved);
+  updateTabState(activeTabIndex);
   s->setValue("name", objectName());
   s->setValue("options", prefs->optionsToString(saved.options));
   s->setValue("state", saved.state);
   s->setValue("tools", prefs->toolsToString(tools));
   s->setValue("documentUrl", getDecoratedUrl().toString());
+  if (tabsEnabled())
+    {
+      int count = qMax(1, tabStates.size());
+      s->setValue("tabCount", count);
+      s->setValue("activeTab", qBound(0, activeTabIndex, count-1));
+      s->beginGroup("tabs");
+      s->remove("");
+      for (int i=0; i<count; ++i)
+        {
+          QUrl tabUrl;
+          if (i == activeTabIndex && document)
+            tabUrl = getDecoratedUrl();
+          else if (i < tabStates.size())
+            tabUrl = tabStates[i].url;
+          if (tabUrl.isValid())
+            s->setValue(QString::number(i), tabUrl.toString());
+        }
+      s->endGroup();
+    }
 }
 
 void  
@@ -1566,7 +1587,59 @@ QDjView::restoreSession(QSettings *s)
     setObjectName(s->value("name").toString());
   applySaved(&saved);
   updateActionsLater();
-  if (du.isValid())
+  if (tabsEnabled() && s->contains("tabCount"))
+    {
+      int count = qMax(1, s->value("tabCount").toInt());
+      int active = qBound(0, s->value("activeTab", 0).toInt(), count-1);
+      QList<TabState> restored;
+      s->beginGroup("tabs");
+      for (int i=0; i<count; ++i)
+        {
+          TabState ts;
+          QUrl tabUrl = QUrl(s->value(QString::number(i)).toString());
+          if (tabUrl.isValid())
+            {
+              ts.url = tabUrl;
+              ts.fileName = removeDjVuCgiArguments(tabUrl).toLocalFile();
+            }
+          restored << ts;
+        }
+      s->endGroup();
+      closeDocument();
+      tabsInternalChange = true;
+      while (documentTabs->count() > 0)
+        documentTabs->removeTab(documentTabs->count()-1);
+      tabsInternalChange = false;
+      tabStates.clear();
+      for (int i=0; i<restored.size(); ++i)
+        {
+          tabsInternalChange = true;
+          documentTabs->addTab(tr("Start"));
+          tabsInternalChange = false;
+          tabStates << restored[i];
+          updateTabVisuals(i);
+        }
+      activeTabIndex = qBound(0, active, tabStates.size()-1);
+      tabsInternalChange = true;
+      documentTabs->setCurrentIndex(activeTabIndex);
+      tabsInternalChange = false;
+      if (tabStates[activeTabIndex].url.isValid())
+        {
+          tabsForceCurrent = true;
+          const TabState ts = tabStates[activeTabIndex];
+          if (!ts.fileName.isEmpty() && QFileInfo(ts.fileName).exists())
+            open(ts.fileName);
+          else
+            open(ts.url);
+          tabsForceCurrent = false;
+        }
+      else
+        {
+          setWindowTitle(tr("DjView"));
+          layout->setCurrentWidget(splash);
+        }
+    }
+  else if (du.isValid())
     open(du);
   if (document && s->contains("pageNo")) // compat
     goToPage(s->value("pageNo", 0).toInt());
@@ -2387,6 +2460,11 @@ QDjView::QDjView(QDjVuContext &context, ViewerMode mode, QWidget *parent)
   : QMainWindow(parent),
     viewerMode(mode < STANDALONE ? mode : STANDALONE),
     djvuContext(context),
+    documentTabs(0),
+    activeTabIndex(-1),
+    tabsInternalChange(false),
+    tabsSwitching(false),
+    tabsForceCurrent(false),
     document(0),
     hasNumericalPageTitle(true),
     updateActionsScheduled(false),
@@ -2437,9 +2515,37 @@ QDjView::QDjView(QDjVuContext &context, ViewerMode mode, QWidget *parent)
   if (viewerMode < STANDALONE)
     useOpenGL = false; // GLWidget/XEmbed has focus issues
   
-  // Create djvu widget
+  // Create central container and document tabs
   QWidget *central = new QWidget(this);
-  widget = new QDjVuWidget(useOpenGL, central);
+  QVBoxLayout *centralLayout = new QVBoxLayout(central);
+  centralLayout->setContentsMargins(0, 0, 0, 0);
+  centralLayout->setSpacing(0);
+  documentTabs = new QTabBar(central);
+  documentTabs->setDocumentMode(true);
+  documentTabs->setMovable(true);
+  documentTabs->setTabsClosable(true);
+  documentTabs->setExpanding(false);
+  documentTabs->setElideMode(Qt::ElideRight);
+  connect(documentTabs, SIGNAL(currentChanged(int)),
+          this, SLOT(tabChanged(int)));
+  connect(documentTabs, SIGNAL(tabCloseRequested(int)),
+          this, SLOT(tabCloseRequested(int)));
+  if (viewerMode >= STANDALONE)
+    {
+      documentTabs->addTab(tr("Start"));
+      tabStates << TabState();
+      activeTabIndex = 0;
+    }
+  else
+    {
+      documentTabs->hide();
+    }
+  centralLayout->addWidget(documentTabs);
+  QWidget *viewer = new QWidget(central);
+  centralLayout->addWidget(viewer);
+
+  // Create djvu widget
+  widget = new QDjVuWidget(useOpenGL, viewer);
   widget->setFrameShape(QFrame::NoFrame);
   if (viewerMode >= STANDALONE)
     widget->setFrameShadow(QFrame::Sunken);
@@ -2469,7 +2575,7 @@ QDjView::QDjView(QDjVuContext &context, ViewerMode mode, QWidget *parent)
           this, SLOT(pointerSelect(const QPoint&,const QRect&)));
 
   // Create splash screen
-  splash = new QLabel(central);
+  splash = new QLabel(viewer);
   splash->setFrameShadow(QFrame::Sunken);
   splash->setAlignment(Qt::AlignHCenter|Qt::AlignVCenter);
   splash->setPixmap(QPixmap(":/images/splash.png"));
@@ -2479,7 +2585,7 @@ QDjView::QDjView(QDjVuContext &context, ViewerMode mode, QWidget *parent)
   splash->setAutoFillBackground(true);
 
   // Create central layout
-  layout = new QStackedLayout(central);
+  layout = new QStackedLayout(viewer);
   layout->addWidget(widget);
   layout->addWidget(splash);
   layout->setCurrentWidget(splash);
@@ -2632,6 +2738,128 @@ QDjView::QDjView(QDjVuContext &context, ViewerMode mode, QWidget *parent)
   widget->reduceOptionsToPriority(QDjVuWidget::PRIORITY_DEFAULT);
 }
 
+bool
+QDjView::tabsEnabled() const
+{
+  return (viewerMode >= STANDALONE && documentTabs);
+}
+
+void
+QDjView::updateTabState(int index)
+{
+  if (!tabsEnabled() || index < 0 || index >= tabStates.size())
+    return;
+  if (document && index == activeTabIndex)
+    {
+      tabStates[index].fileName = documentFileName;
+      QUrl decorated = getDecoratedUrl();
+      if (decorated.isValid())
+        tabStates[index].url = decorated;
+      else if (!documentFileName.isEmpty())
+        tabStates[index].url = QUrl::fromLocalFile(QFileInfo(documentFileName).absoluteFilePath());
+    }
+}
+
+void
+QDjView::updateTabVisuals(int index)
+{
+  if (!tabsEnabled() || index < 0 || index >= tabStates.size() || index >= documentTabs->count())
+    return;
+  const TabState &tab = tabStates[index];
+  QString title = tr("Start");
+  if (!tab.fileName.isEmpty())
+    title = QFileInfo(tab.fileName).fileName();
+  else if (tab.url.isValid())
+    title = QFileInfo(removeDjVuCgiArguments(tab.url).toLocalFile()).fileName();
+  if (title.isEmpty() && tab.url.isValid())
+    title = removeDjVuCgiArguments(tab.url).toString();
+  documentTabs->setTabText(index, title);
+  QString tooltip = tab.fileName;
+  if (tooltip.isEmpty() && tab.url.isValid())
+    tooltip = tab.url.toString();
+  documentTabs->setTabToolTip(index, tooltip);
+}
+
+int
+QDjView::prepareTabForOpen(const QUrl &url, const QString &fileName, bool &createdNewTab)
+{
+  createdNewTab = false;
+  if (!tabsEnabled() || tabsSwitching || tabsForceCurrent)
+    return documentTabs ? documentTabs->currentIndex() : -1;
+  int index = documentTabs->currentIndex();
+  if (index < 0)
+    {
+      tabsInternalChange = true;
+      documentTabs->addTab(tr("Start"));
+      tabsInternalChange = false;
+      tabStates << TabState();
+      index = 0;
+      activeTabIndex = 0;
+    }
+  bool occupied = (document != 0);
+  if (!occupied && index >= 0 && index < tabStates.size())
+    {
+      occupied = (!tabStates[index].fileName.isEmpty() || tabStates[index].url.isValid());
+    }
+  if (occupied)
+    {
+      int newIndex = index + 1;
+      tabsInternalChange = true;
+      documentTabs->insertTab(newIndex, tr("Loading..."));
+      documentTabs->setCurrentIndex(newIndex);
+      tabsInternalChange = false;
+      tabStates.insert(newIndex, TabState());
+      activeTabIndex = newIndex;
+      index = newIndex;
+      createdNewTab = true;
+    }
+  if (index >= 0 && index < tabStates.size())
+    {
+      tabStates[index].url = url;
+      tabStates[index].fileName = fileName;
+      updateTabVisuals(index);
+    }
+  return index;
+}
+
+void
+QDjView::dropPreparedTab(int index)
+{
+  if (!tabsEnabled() || index < 0 || index >= tabStates.size())
+    return;
+  if (tabStates.size() <= 1)
+    {
+      tabStates[0] = TabState();
+      updateTabVisuals(0);
+      return;
+    }
+  tabsInternalChange = true;
+  documentTabs->removeTab(index);
+  tabsInternalChange = false;
+  tabStates.removeAt(index);
+  int newIndex = qMin(index, tabStates.size()-1);
+  tabsInternalChange = true;
+  documentTabs->setCurrentIndex(newIndex);
+  tabsInternalChange = false;
+  activeTabIndex = newIndex;
+  updateTabVisuals(newIndex);
+}
+
+void
+QDjView::commitOpenToCurrentTab(const QUrl &url, const QString &fileName)
+{
+  if (!tabsEnabled())
+    return;
+  int index = documentTabs->currentIndex();
+  if (index < 0)
+    return;
+  if (index >= tabStates.size())
+    tabStates.resize(index + 1);
+  tabStates[index].url = url;
+  tabStates[index].fileName = fileName;
+  updateTabVisuals(index);
+}
+
 
 void 
 QDjView::closeDocument()
@@ -2693,6 +2921,7 @@ QDjView::open(QDjVuDocument *doc, QUrl url)
   docinfo();
   if (doc)
     emit documentOpened(doc);
+  commitOpenToCurrentTab(url, documentFileName);
   // process url options
   if (url.isValid())
     parseDjVuCgiArguments(url);
@@ -2712,6 +2941,10 @@ QDjView::open(QDjVuDocument *doc, QUrl url)
 bool
 QDjView::open(QString filename)
 {
+  QFileInfo fileinfo(filename);
+  QUrl url = QUrl::fromLocalFile(fileinfo.absoluteFilePath());
+  bool createdNewTab = false;
+  int preparedTab = prepareTabForOpen(url, fileinfo.absoluteFilePath(), createdNewTab);
   closeDocument();
   QDjVuDocument *doc = new QDjVuDocument(true);
   connect(doc, SIGNAL(error(QString,QString,int)),
@@ -2720,15 +2953,16 @@ QDjView::open(QString filename)
   if (!doc->isValid())
     {
       delete doc;
+      if (createdNewTab)
+        dropPreparedTab(preparedTab);
       addToErrorDialog(tr("Cannot open file '%1'.").arg(filename));
       raiseErrorDialog(QMessageBox::Critical, tr("Opening DjVu file"));
       return false;
     }
-  QFileInfo fileinfo(filename);
-  QUrl url = QUrl::fromLocalFile(fileinfo.absoluteFilePath());
   open(doc, url);
   documentFileName = filename;
   documentModified = QFileInfo(filename).lastModified();
+  commitOpenToCurrentTab(url, filename);
   restoreRecentDocument(url);
   return true;
 }
@@ -2806,6 +3040,10 @@ public slots:
 bool
 QDjView::open(QUrl url, bool inNewWindow, bool maybeInBrowser)
 {
+  bool createdNewTab = false;
+  int preparedTab = -1;
+  if (!inNewWindow)
+    preparedTab = prepareTabForOpen(url, QString(), createdNewTab);
   QDjVuNetDocument *doc = new QDjVuNetDocument(true);
   connect(doc, SIGNAL(error(QString,QString,int)),
           errorDialog, SLOT(error(QString,QString,int)));
@@ -2818,6 +3056,8 @@ QDjView::open(QUrl url, bool inNewWindow, bool maybeInBrowser)
   if (! (url.isValid() && doc->isValid()))
     {
       delete doc;
+      if (createdNewTab)
+        dropPreparedTab(preparedTab);
       addToErrorDialog(tr("Cannot open URL '%1'.").arg(url.toString()));
       raiseErrorDialog(QMessageBox::Critical, tr("Opening DjVu document"));
       return false;
@@ -2874,12 +3114,16 @@ QDjView::reloadDocument()
       QFileInfo file(url.toLocalFile());
       if (file.exists())
         {
+          tabsForceCurrent = true;
           open(file.absoluteFilePath());
+          tabsForceCurrent = false;
           parseDjVuCgiArguments(url);
           return;
         }
       // Opening the url could do it all in fact.
+      tabsForceCurrent = true;
       open(url);
+      tabsForceCurrent = false;
     }
 }
 
@@ -3779,6 +4023,18 @@ QDjView::startBrowser(QUrl url)
 void
 QDjView::closeEvent(QCloseEvent *event)
 {
+  if (viewerMode == STANDALONE)
+    {
+      QSettings s;
+      s.remove("last_session");
+      s.beginGroup("last_session");
+      s.setValue("windows", 1);
+      s.beginGroup("1");
+      saveSession(&s);
+      s.endGroup();
+      s.endGroup();
+      s.sync();
+    }
   // Close document.
   closeDocument();
   // Save options.
@@ -4490,6 +4746,83 @@ QDjView::performNew(void)
     return;
   QDjView *other = copyWindow(false);
   other->show();
+}
+
+void
+QDjView::closeCurrentTab()
+{
+  if (!tabsEnabled())
+    {
+      close();
+      return;
+    }
+  tabCloseRequested(documentTabs->currentIndex());
+}
+
+void
+QDjView::tabCloseRequested(int index)
+{
+  if (!tabsEnabled() || index < 0 || index >= tabStates.size())
+    return;
+  if (tabStates.size() <= 1)
+    {
+      closeDocument();
+      tabStates[0] = TabState();
+      updateTabVisuals(0);
+      documentTabs->setCurrentIndex(0);
+      activeTabIndex = 0;
+      setWindowTitle(tr("DjView"));
+      return;
+    }
+  bool wasActive = (index == documentTabs->currentIndex());
+  tabsInternalChange = true;
+  documentTabs->removeTab(index);
+  tabsInternalChange = false;
+  tabStates.removeAt(index);
+  if (wasActive)
+    {
+      int next = qMin(index, tabStates.size() - 1);
+      tabsInternalChange = true;
+      documentTabs->setCurrentIndex(next);
+      tabsInternalChange = false;
+      tabChanged(next);
+    }
+  else
+    {
+      if (activeTabIndex > index)
+        --activeTabIndex;
+    }
+}
+
+void
+QDjView::tabChanged(int index)
+{
+  if (!tabsEnabled() || tabsInternalChange || index < 0 || index >= tabStates.size())
+    return;
+  if (index == activeTabIndex)
+    return;
+  updateTabState(activeTabIndex);
+  activeTabIndex = index;
+  const TabState tab = tabStates[index];
+  tabsSwitching = true;
+  tabsForceCurrent = true;
+  if (!tab.fileName.isEmpty() && QFileInfo(tab.fileName).exists())
+    {
+      open(tab.fileName);
+      if (tab.url.isValid())
+        parseDjVuCgiArguments(tab.url);
+    }
+  else if (tab.url.isValid())
+    {
+      open(tab.url, false, false);
+    }
+  else
+    {
+      closeDocument();
+      setWindowTitle(tr("DjView"));
+    }
+  tabsForceCurrent = false;
+  tabsSwitching = false;
 }
 
 

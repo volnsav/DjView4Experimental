@@ -11,9 +11,8 @@ on:
         type: choice
         options:
           - x64-release
-          - all-release
-          - all-debug
-          - full
+          - x64-debug
+          - both
       djvu_repo:
         description: "DjVuLibreExperimental repository (owner/name)"
         required: false
@@ -25,6 +24,9 @@ jobs:
     name: Release x64
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: windows-latest
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+      DJVU_PLATFORM_TOOLSET: v143
 
     steps:
       - name: Checkout DjView4Experimental
@@ -40,38 +42,7 @@ jobs:
       - name: Prepare DjVuLibre third-party sources (jpeg/zlib/tiff)
         shell: pwsh
         run: |
-          $winRoot = Join-Path $env:GITHUB_WORKSPACE "DjVuLibreExperimental\\windows"
-          $tmpRoot = $env:RUNNER_TEMP
-
-          $jpegDir = Join-Path $winRoot "jpeg\\jpeg-6b"
-          if (-not (Test-Path $jpegDir)) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $winRoot "jpeg") | Out-Null
-            $jpegTar = Join-Path $tmpRoot "jpegsrc.v6b.tar.gz"
-            Invoke-WebRequest -Uri "https://www.ijg.org/files/jpegsrc.v6b.tar.gz" -OutFile $jpegTar
-            tar -xzf $jpegTar -C (Join-Path $winRoot "jpeg")
-          }
-
-          $zlibDir = Join-Path $winRoot "zlib\\zlib"
-          if (-not (Test-Path $zlibDir)) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $winRoot "zlib") | Out-Null
-            $zlibTar = Join-Path $tmpRoot "zlib-1.2.13.tar.gz"
-            Invoke-WebRequest -Uri "https://zlib.net/fossils/zlib-1.2.13.tar.gz" -OutFile $zlibTar
-            tar -xzf $zlibTar -C (Join-Path $winRoot "zlib")
-            if (Test-Path (Join-Path $winRoot "zlib\\zlib-1.2.13")) {
-              Move-Item -Force (Join-Path $winRoot "zlib\\zlib-1.2.13") $zlibDir
-            }
-          }
-
-          $tiffLibDir = Join-Path $winRoot "tiff\\tiff\\libtiff"
-          if (-not (Test-Path $tiffLibDir)) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $winRoot "tiff") | Out-Null
-            $tiffTar = Join-Path $tmpRoot "tiff-4.0.10.tar.gz"
-            Invoke-WebRequest -Uri "https://download.osgeo.org/libtiff/tiff-4.0.10.tar.gz" -OutFile $tiffTar
-            tar -xzf $tiffTar -C (Join-Path $winRoot "tiff")
-            if (Test-Path (Join-Path $winRoot "tiff\\tiff-4.0.10")) {
-              Move-Item -Force (Join-Path $winRoot "tiff\\tiff-4.0.10") (Join-Path $winRoot "tiff\\tiff")
-            }
-          }
+          .\.github\scripts\prepare-djvu-third-party.ps1 -DjvuRoot (Join-Path $env:GITHUB_WORKSPACE "DjVuLibreExperimental")
 
       - name: Setup vcpkg
         shell: pwsh
@@ -96,15 +67,22 @@ jobs:
         run: |
           Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
           $packages = @("qtbase:x64-windows", "qttools:x64-windows", "qtbase:x64-windows-release")
-          .\vcpkg\vcpkg.exe install --overlay-triplets=.github/vcpkg-triplets @packages
+          .\vcpkg\vcpkg.exe --vcpkg-root "$env:GITHUB_WORKSPACE\vcpkg" install --overlay-triplets=.github/vcpkg-triplets @packages
+
+      - name: Sanitize MSVC toolset env
+        shell: pwsh
+        run: |
+          Remove-Item Env:VCVARS_VER -ErrorAction SilentlyContinue
 
       - name: Build combined bundle
         shell: pwsh
+        working-directory: ${{ github.workspace }}
         env:
           VCPKG_ROOT: ${{ github.workspace }}\vcpkg
           VCPKG_TRIPLET: x64-windows-release
           VCPKG_HOST_TRIPLET: x64-windows
           DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
+          DJVU_PLATFORM_TOOLSET: ${{ env.DJVU_PLATFORM_TOOLSET }}
         run: |
           cmd /c .\build_combined_release.bat Release x64
 
@@ -119,6 +97,9 @@ jobs:
     name: ${{ matrix.config }} ${{ matrix.platform }}
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: windows-latest
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+      DJVU_PLATFORM_TOOLSET: v143
     strategy:
       fail-fast: false
       matrix:
@@ -131,18 +112,6 @@ jobs:
             platform: x64
             triplet: x64-windows
             outdir: Debug_x64_strict
-          - config: Release
-            platform: x86
-            triplet: x86-windows
-            outdir: Release_Win32_strict
-          - config: Debug
-            platform: x86
-            triplet: x86-windows
-            outdir: Debug_Win32_strict
-          - config: Release
-            platform: arm64
-            triplet: arm64-windows
-            outdir: Release_ARM64_strict
 
     steps:
       - name: Select matrix entry by mode
@@ -157,24 +126,16 @@ jobs:
           $run = $false
           if ($mode -eq 'x64-release') {
             $run = ($config -eq 'Release' -and $platform -eq 'x64')
-          } elseif ($mode -eq 'all-release') {
-            $run = ($config -eq 'Release')
-          } elseif ($mode -eq 'all-debug') {
-            $run = ($config -eq 'Debug')
-          } elseif ($mode -eq 'full') {
+          } elseif ($mode -eq 'x64-debug') {
+            $run = ($config -eq 'Debug' -and $platform -eq 'x64')
+          } elseif ($mode -eq 'both') {
             $run = $true
           }
 
           $targetTriplet = $triplet
           $hostTriplet = 'x64-windows'
           if ($config -eq 'Release') {
-            if ($triplet -eq 'x64-windows') {
-              $targetTriplet = 'x64-windows-release'
-            } elseif ($triplet -eq 'x86-windows') {
-              $targetTriplet = 'x86-windows-release'
-            } elseif ($triplet -eq 'arm64-windows') {
-              $targetTriplet = 'arm64-windows-release'
-            }
+            $targetTriplet = 'x64-windows-release'
           }
 
           "run=$($run.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
@@ -197,38 +158,7 @@ jobs:
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         shell: pwsh
         run: |
-          $winRoot = Join-Path $env:GITHUB_WORKSPACE "DjVuLibreExperimental\\windows"
-          $tmpRoot = $env:RUNNER_TEMP
-
-          $jpegDir = Join-Path $winRoot "jpeg\\jpeg-6b"
-          if (-not (Test-Path $jpegDir)) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $winRoot "jpeg") | Out-Null
-            $jpegTar = Join-Path $tmpRoot "jpegsrc.v6b.tar.gz"
-            Invoke-WebRequest -Uri "https://www.ijg.org/files/jpegsrc.v6b.tar.gz" -OutFile $jpegTar
-            tar -xzf $jpegTar -C (Join-Path $winRoot "jpeg")
-          }
-
-          $zlibDir = Join-Path $winRoot "zlib\\zlib"
-          if (-not (Test-Path $zlibDir)) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $winRoot "zlib") | Out-Null
-            $zlibTar = Join-Path $tmpRoot "zlib-1.2.13.tar.gz"
-            Invoke-WebRequest -Uri "https://zlib.net/fossils/zlib-1.2.13.tar.gz" -OutFile $zlibTar
-            tar -xzf $zlibTar -C (Join-Path $winRoot "zlib")
-            if (Test-Path (Join-Path $winRoot "zlib\\zlib-1.2.13")) {
-              Move-Item -Force (Join-Path $winRoot "zlib\\zlib-1.2.13") $zlibDir
-            }
-          }
-
-          $tiffLibDir = Join-Path $winRoot "tiff\\tiff\\libtiff"
-          if (-not (Test-Path $tiffLibDir)) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $winRoot "tiff") | Out-Null
-            $tiffTar = Join-Path $tmpRoot "tiff-4.0.10.tar.gz"
-            Invoke-WebRequest -Uri "https://download.osgeo.org/libtiff/tiff-4.0.10.tar.gz" -OutFile $tiffTar
-            tar -xzf $tiffTar -C (Join-Path $winRoot "tiff")
-            if (Test-Path (Join-Path $winRoot "tiff\\tiff-4.0.10")) {
-              Move-Item -Force (Join-Path $winRoot "tiff\\tiff-4.0.10") (Join-Path $winRoot "tiff\\tiff")
-            }
-          }
+          .\.github\scripts\prepare-djvu-third-party.ps1 -DjvuRoot (Join-Path $env:GITHUB_WORKSPACE "DjVuLibreExperimental")
 
       - name: Setup vcpkg
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
@@ -261,16 +191,24 @@ jobs:
           if ($targetTriplet -ne $hostTriplet) {
             $packages += "qtbase:$targetTriplet"
           }
-          .\vcpkg\vcpkg.exe install --overlay-triplets=.github/vcpkg-triplets @packages
+          .\vcpkg\vcpkg.exe --vcpkg-root "$env:GITHUB_WORKSPACE\vcpkg" install --overlay-triplets=.github/vcpkg-triplets @packages
+
+      - name: Sanitize MSVC toolset env
+        if: ${{ steps.mode_filter.outputs.run == 'true' }}
+        shell: pwsh
+        run: |
+          Remove-Item Env:VCVARS_VER -ErrorAction SilentlyContinue
 
       - name: Build combined bundle
         if: ${{ steps.mode_filter.outputs.run == 'true' }}
         shell: pwsh
+        working-directory: ${{ github.workspace }}
         env:
           VCPKG_ROOT: ${{ github.workspace }}\vcpkg
           VCPKG_TRIPLET: ${{ steps.mode_filter.outputs.target_triplet }}
           VCPKG_HOST_TRIPLET: ${{ steps.mode_filter.outputs.host_triplet }}
           DJVU_ROOT: ${{ github.workspace }}\DjVuLibreExperimental
+          DJVU_PLATFORM_TOOLSET: ${{ env.DJVU_PLATFORM_TOOLSET }}
         run: |
           cmd /c .\build_combined_release.bat ${{ matrix.config }} ${{ matrix.platform }}
 
