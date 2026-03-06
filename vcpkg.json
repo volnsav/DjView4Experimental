@@ -1,0 +1,9 @@
+{
+  "name": "djview4",
+  "version": "4.12.0",
+  "description": "DjView4 – DjVu document viewer",
+  "dependencies": [
+    "qtbase",
+    "qttools"
+  ]
+}

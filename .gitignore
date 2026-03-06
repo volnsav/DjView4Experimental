@@ -1,7 +1,26 @@
+### Build output ###
+/build/
+/build-*/
+
+### CMake user overrides ###
+/CMakeUserPresets.json
+
+### vcpkg ###
+/vcpkg/
+/vcpkg_installed/
+
+### IDE ###
+/.vs/
+/.idea/
+*.user
+*.suo
+
+### Qt generated ###
+/share/djvu/djview4/*.qm
+
+### Autotools / legacy safety net ###
 .libs/
 /.pc/
-/BUILD*
-/INSTALL
 /aclocal.m4
 /autom4te.cache/
 /config.h
@@ -10,6 +29,4 @@
 /configure
 /libtool
 /stamp-h1
-Makefile
 Makefile.in
-/share/djvu/djview4/*.qm
