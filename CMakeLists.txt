@@ -65,7 +65,11 @@ if(NOT DjVuLibre_FOUND)
     # Fall back to pkg-config (system DjVuLibre on Linux).
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
+        # Debian/Ubuntu ships ddjvuapi.pc; some distros ship djvulibre.pc.
         pkg_check_modules(djvulibre IMPORTED_TARGET djvulibre)
+        if(NOT djvulibre_FOUND)
+            pkg_check_modules(djvulibre IMPORTED_TARGET ddjvuapi)
+        endif()
         if(djvulibre_FOUND)
             # Expose a proper target alias so src/CMakeLists.txt is uniform.
             add_library(DjVuLibre::DjVuLibre INTERFACE IMPORTED)
