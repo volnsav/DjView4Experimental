@@ -18,15 +18,3 @@
 ### Qt generated ###
 /share/djvu/djview4/*.qm
 
-### Autotools / legacy safety net ###
-.libs/
-/.pc/
-/aclocal.m4
-/autom4te.cache/
-/config.h
-/config.log
-/config.status
-/configure
-/libtool
-/stamp-h1
-Makefile.in
