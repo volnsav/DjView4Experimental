@@ -1839,16 +1839,30 @@ public:
     const int imgH = qimg.height();
 
     // Compress to JPEG.
+    // Convert to Format_RGB888 first: Format_RGB32 may have alpha=0 pixels
+    // (ddjvu with RGBMASK32 doesn't guarantee alpha bits on all versions),
+    // which some Qt JPEG plugin builds refuse to encode.
     QByteArray jpeg;
     {
       QBuffer buf(&jpeg);
       buf.open(QIODevice::WriteOnly);
-      qimg.save(&buf, "JPEG", jpegQ_);
+      const QImage toEncode = (qimg.format() == QImage::Format_RGB888)
+                                  ? qimg
+                                  : qimg.convertToFormat(QImage::Format_RGB888);
+      toEncode.save(&buf, "JPEG", jpegQ_);
     }
-    // Safety: verify JPEG header; if empty, skip page.
-    if (jpeg.isEmpty() || (unsigned char)jpeg[0] != 0xFF
-                       || (unsigned char)jpeg[1] != 0xD8)
-      return false;
+    // If JPEG encoding failed (plugin not found, etc.) fall back to a white
+    // placeholder so the rest of the pages are not lost.
+    if (jpeg.isEmpty() || (unsigned char)(jpeg[0]) != 0xFF
+                       || (unsigned char)(jpeg[1]) != 0xD8) {
+      // Encode a tiny 1×1 white JPEG as placeholder.
+      QImage white(imgW, imgH, QImage::Format_RGB888);
+      white.fill(Qt::white);
+      QBuffer buf2(&jpeg); buf2.open(QIODevice::WriteOnly);
+      white.save(&buf2, "JPEG", 75);
+      // If still failing, truly skip (should never happen with a correct Qt install).
+      if (jpeg.isEmpty()) return false;
+    }
 
     // Page dimensions in PDF points (1 pt = 1/72 inch).
     const double ptW = mmW / 25.4 * 72.0;
@@ -2053,22 +2067,21 @@ private:
     for (int i = 0; i < sz; ++i) widths += "1 ";
     widths += "]";
 
-    // Font object (obj 3).
+    // Font object (obj 3) — built with QByteArray concatenation to avoid
+    // baf()'s 1024-char limit being exceeded by large CharProcs/Widths.
     beginObj(3);
-    write(baf(
-      "<< /Type /Font /Subtype /Type3\n"
-      "   /FontBBox [0 0 1 1]\n"
-      "   /FontMatrix [0.001 0 0 0.001 0 0]\n"
-      "   /FirstChar 0 /LastChar %d\n"
-      "   /Widths %s\n"
-      "   /CharProcs %s\n"
-      "   /Encoding << /Type /Encoding /Differences [0%s] >>\n"
-      "   /ToUnicode %d 0 R >>\n",
-      sz > 0 ? sz - 1 : 0,
-      widths.constData(),
-      charProcs.constData(),
-      charset_.buildDifferences().constData(),
-      cmapObj));
+    QByteArray fontDict;
+    fontDict += "<< /Type /Font /Subtype /Type3\n";
+    fontDict += "   /FontBBox [0 0 1 1]\n";
+    fontDict += "   /FontMatrix [0.001 0 0 0.001 0 0]\n";
+    fontDict += baf("   /FirstChar 0 /LastChar %d\n", sz > 0 ? sz - 1 : 0);
+    fontDict += "   /Widths " + widths + "\n";
+    fontDict += "   /CharProcs " + charProcs + "\n";
+    fontDict += "   /Encoding << /Type /Encoding /Differences [0";
+    fontDict += charset_.buildDifferences();
+    fontDict += "] >>\n";
+    fontDict += baf("   /ToUnicode %d 0 R >>\n", cmapObj);
+    file_.write(fontDict);
     endObj();
   }
 };
@@ -2240,8 +2253,8 @@ QDjViewPdfTextExporter::doPage()
   // Render at min(imgdpi, outDpi) to avoid unnecessary upscaling.
   const int outDpi    = qBound(72, ui.dpiSpinBox->value(), 1200);
   const int renderDpi = qMin(imgdpi, outDpi);
-  const int renderW   = (srcW * renderDpi + imgdpi / 2) / imgdpi;
-  const int renderH   = (srcH * renderDpi + imgdpi / 2) / imgdpi;
+  const int renderW   = qMax(1, (srcW * renderDpi + imgdpi / 2) / imgdpi);
+  const int renderH   = qMax(1, (srcH * renderDpi + imgdpi / 2) / imgdpi);
 
   // Determine render mode from viewer's current display setting.
   ddjvu_render_mode_t renderMode = DDJVU_RENDER_COLOR;
@@ -2252,16 +2265,14 @@ QDjViewPdfTextExporter::doPage()
     else if (dm == QDjVuWidget::DISPLAY_FG)      renderMode = DDJVU_RENDER_FOREGROUND;
   }
 
-  // Render into Format_RGB32 (no alpha → JPEG-compatible).
-  unsigned int masks[4] = { 0xff0000, 0xff00, 0xff, 0xff000000 };
-  ddjvu_format_t *fmt = ddjvu_format_create(DDJVU_FORMAT_RGBMASK32, 4, masks);
-  ddjvu_format_set_row_order(fmt, 1);
-  ddjvu_format_set_gamma(fmt, 2.2);
+  // Render into Format_RGB888 (24-bit RGB, no alpha — JPEG-compatible).
   ddjvu_rect_t rect; rect.x = rect.y = 0;
   rect.w = (unsigned)renderW;
   rect.h = (unsigned)renderH;
-
-  QImage qimg(renderW, renderH, QImage::Format_RGB32);
+  ddjvu_format_t *fmt = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+  ddjvu_format_set_row_order(fmt, 1);
+  ddjvu_format_set_gamma(fmt, 2.2);
+  QImage qimg(renderW, renderH, QImage::Format_RGB888);
   qimg.fill(Qt::white);
   const bool renderOk = ddjvu_page_render(
     *page, renderMode, &rect, &rect, fmt,
