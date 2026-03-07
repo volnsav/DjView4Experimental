@@ -2615,23 +2615,54 @@ QDjViewPdfTextExporter::doPage()
     useGray = !hasColor;
   }
 
-  // COMPOUND pages: BG = RENDER_COLOR JPEG at renderDpi (all visual content:
-  // photo, gray fills, text at low-res) + FG = RENDER_BLACK JBIG2 stencil at
+  // COMPOUND pages: BG = RENDER_BACKGROUND JPEG at renderDpi (IW44 layer only:
+  // photo, paper texture — no Sjbz text) + FG = RENDER_BLACK JBIG2 stencil at
   // native DPI drawn as /ImageMask (sharp black text/lines on top).
+  // Using RENDER_BACKGROUND avoids double-rendering: the RENDER_COLOR image
+  // contains anti-aliased text at 300dpi which would show as a gray halo under
+  // the sharp JBIG2 stencil. RENDER_BACKGROUND has only the IW44 background.
   // BITONAL pages: skip this path, go straight to JBIG2-only below.
   bool forceJbig2 = isBitonalEarly;
   const ddjvu_page_type_t earlyType = ddjvu_page_get_type(*page);
   if (earlyType == DDJVU_PAGETYPE_COMPOUND && renderMode == DDJVU_RENDER_COLOR) {
     const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
-    // BG: encode the already-rendered RENDER_COLOR image as JPEG.
+    // BG: fresh RENDER_BACKGROUND render at renderDpi (IW44 layer, no stencil).
     QByteArray bgData;
-    const bool bgIsGray = useGray;
-    if (bgIsGray) {
-      bgData = encodeJpegGray(qimg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
-    } else {
-      QBuffer buf(&bgData); buf.open(QIODevice::WriteOnly);
-      QImageWriter writer(&buf, "JPEG"); writer.setQuality(jpegQ);
-      writer.write(qimg);
+    bool bgIsGray = false;
+    {
+      ddjvu_rect_t brect; brect.x = brect.y = 0;
+      brect.w = (unsigned)renderW; brect.h = (unsigned)renderH;
+      ddjvu_format_t *fmtBg = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+      ddjvu_format_set_row_order(fmtBg, 1);
+      QImage bgImg(renderW, renderH, QImage::Format_RGB888);
+      bgImg.fill(Qt::white);
+      const bool bgOk = ddjvu_page_render(*page, DDJVU_RENDER_BACKGROUND,
+                           &brect, &brect, fmtBg,
+                           bgImg.bytesPerLine(),
+                           reinterpret_cast<char *>(bgImg.bits()));
+      ddjvu_format_release(fmtBg);
+      if (bgOk) {
+        // Check chroma on background render to decide gray vs RGB JPEG.
+        const uchar *bits = bgImg.constBits();
+        const int total = renderW * renderH;
+        const int step = qMax(1, total / 2000);
+        bool hasColor = false;
+        for (int px = 0; px < total && !hasColor; px += step) {
+          const uchar *p = bits + px * 3;
+          int diff = qMax(qAbs((int)p[0]-(int)p[1]),
+                         qMax(qAbs((int)p[1]-(int)p[2]),
+                              qAbs((int)p[0]-(int)p[2])));
+          if (diff > 16) hasColor = true;
+        }
+        bgIsGray = !hasColor;
+        if (bgIsGray) {
+          bgData = encodeJpegGray(bgImg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
+        } else {
+          QBuffer buf(&bgData); buf.open(QIODevice::WriteOnly);
+          QImageWriter writer(&buf, "JPEG"); writer.setQuality(jpegQ);
+          writer.write(bgImg);
+        }
+      }
     }
     // FG: 1bpp JBIG2 stencil from RENDER_BLACK at native DPI.
     QByteArray fgData = encodeJbig2BlackRender(*page, srcW, srcH);
