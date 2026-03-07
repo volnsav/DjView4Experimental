@@ -1,2 +1,1 @@
-usr/lib/*/plugins/*.so
-usr/share/man/man*/nsdejavu.*
+# plugin removed in 4.13 - NPAPI browser plugin sources dropped

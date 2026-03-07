@@ -1,3 +1,15 @@
+djview4 (4.13-1) experimental; urgency=medium
+
+  * Version 4.13
+  * Migrate build system from qmake/autotools to CMake 3.21+
+  * Migrate to Qt6 (drop Qt4/Qt5 build deps)
+  * Add tabbed document window, dark-theme rendering fixes
+  * Drop NPAPI browser plugin (npdjvu, nsdejavu)
+  * Update debian/rules to use --buildsystem=cmake
+  * Update debian/control: Qt6 build deps, remove plugin packages
+
+ -- Volodymyr Savchenko <volnsav@github>  Fri, 06 Mar 2026 12:00:00 +0200
+
 djview4 (4.12-0) experimental; urgency=medium
 
   * Release 4.12

@@ -1,0 +1,162 @@
+name: CI Manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform(s) to build"
+        required: false
+        default: both
+        type: choice
+        options: [linux, windows, both]
+      build_type:
+        description: "Build type"
+        required: false
+        default: Release
+        type: choice
+        options: [Release, Debug]
+      djvu_repo:
+        description: "DjVuLibreExperimental repo (owner/name, empty = same owner)"
+        required: false
+        default: ""
+        type: string
+      djvu_ref:
+        description: "DjVuLibreExperimental git ref"
+        required: false
+        default: "develop"
+        type: string
+
+jobs:
+  # -------------------------------------------------------------------------
+  linux:
+    name: Linux ${{ github.event.inputs.build_type }}
+    if: ${{ github.event.inputs.platform == 'linux' || github.event.inputs.platform == 'both' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout DjView4Experimental
+        uses: actions/checkout@v4
+
+      - name: Checkout DjVuLibreExperimental
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.djvu_repo != '' && github.event.inputs.djvu_repo || format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          ref: ${{ github.event.inputs.djvu_ref }}
+          path: DjVuLibreExperimental
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config g++ \
+            qt6-base-dev qt6-base-dev-tools \
+            qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools \
+            libjpeg-dev libtiff-dev zlib1g-dev \
+            libgl1-mesa-dev
+
+      - name: Build and install DjVuLibre
+        run: |
+          cmake -S DjVuLibreExperimental -B djvulibre-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} \
+            -DDJVULIBRE_USE_BUNDLED_DEPS=OFF \
+            -DDJVULIBRE_ENABLE_GTEST=OFF \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/djvulibre-prefix"
+          cmake --build djvulibre-build --parallel
+          cmake --install djvulibre-build
+
+      - name: Configure DjView4
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} \
+            -DDJVIEW_DJVU_INSTALL_DIR="${GITHUB_WORKSPACE}/djvulibre-prefix" \
+            -DDJVIEW_BUILD_TRANSLATIONS=ON \
+            -DDJVIEW_BUNDLE_DJVU_DEPS=ON
+
+      - name: Build DjView4
+        run: cmake --build build --parallel
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: djview-linux-${{ github.event.inputs.build_type }}-x64
+          path: build/src/djview
+          if-no-files-found: warn
+
+  # -------------------------------------------------------------------------
+  windows:
+    name: Windows ${{ github.event.inputs.build_type }}
+    if: ${{ github.event.inputs.platform == 'windows' || github.event.inputs.platform == 'both' }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout DjView4Experimental
+        uses: actions/checkout@v4
+
+      - name: Checkout DjVuLibreExperimental
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.inputs.djvu_repo != '' && github.event.inputs.djvu_repo || format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          ref: ${{ github.event.inputs.djvu_ref }}
+          path: DjVuLibreExperimental
+
+      - name: Setup vcpkg
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git vcpkg --depth 1
+          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            vcpkg/downloads
+            vcpkg/packages
+            vcpkg/installed
+          key: ${{ runner.os }}-vcpkg-qt6-${{ hashFiles('vcpkg.json', '.github/vcpkg-triplets/**') }}
+          restore-keys: ${{ runner.os }}-vcpkg-qt6-
+
+      - name: Install Qt6 via vcpkg
+        shell: pwsh
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+        run: |
+          $cfg = "${{ github.event.inputs.build_type }}"
+          $triplet = if ($cfg -eq "Release") { "x64-windows-release" } else { "x64-windows" }
+          .\vcpkg\vcpkg.exe install `
+            --overlay-triplets=.github/vcpkg-triplets `
+            --triplet=$triplet `
+            qtbase qttools
+
+      - name: Build and install DjVuLibre
+        shell: pwsh
+        run: |
+          $cfg = "${{ github.event.inputs.build_type }}"
+          cmake -S DjVuLibreExperimental -B djvulibre-build `
+            -DDJVULIBRE_USE_BUNDLED_DEPS=ON `
+            -DDJVULIBRE_ENABLE_GTEST=OFF
+          cmake --build djvulibre-build --config $cfg --parallel
+          cmake --install djvulibre-build --config $cfg `
+            --prefix "$env:GITHUB_WORKSPACE\djvulibre-prefix"
+
+      - name: Configure DjView4
+        shell: pwsh
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+        run: |
+          $cfg = "${{ github.event.inputs.build_type }}"
+          $triplet = if ($cfg -eq "Release") { "x64-windows-release" } else { "x64-windows" }
+          cmake -S . -B build `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=$triplet `
+            -DDJVIEW_DJVU_INSTALL_DIR="$env:GITHUB_WORKSPACE\djvulibre-prefix" `
+            -DDJVIEW_BUILD_TRANSLATIONS=ON
+
+      - name: Build DjView4
+        run: cmake --build build --config ${{ github.event.inputs.build_type }} --parallel
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: djview-windows-${{ github.event.inputs.build_type }}-x64
+          path: build/src/${{ github.event.inputs.build_type }}/djview.exe
+          if-no-files-found: warn

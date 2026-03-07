@@ -1,0 +1,360 @@
+name: CI
+
+on:
+  push:
+    branches: [develop, master, move_to_cmake]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      djvu_ref:
+        description: "DjVuLibreExperimental git ref"
+        required: false
+        default: "develop"
+        type: string
+
+env:
+  DJVU_REF: ${{ github.event.inputs.djvu_ref || 'develop' }}
+
+jobs:
+  # -------------------------------------------------------------------------
+  linux:
+    name: Linux ${{ matrix.build_type }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Release, Debug]
+
+    steps:
+      - name: Checkout DjView4Experimental
+        uses: actions/checkout@v4
+
+      - name: Checkout DjVuLibreExperimental
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          ref: ${{ env.DJVU_REF }}
+          path: DjVuLibreExperimental
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config g++ \
+            qt6-base-dev qt6-base-dev-tools \
+            qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools \
+            libjpeg-dev libtiff-dev zlib1g-dev libgtest-dev \
+            libgl1-mesa-dev
+
+      - name: Build and install DjVuLibre
+        run: |
+          cmake -S DjVuLibreExperimental -B djvulibre-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DDJVULIBRE_USE_BUNDLED_DEPS=OFF \
+            -DDJVULIBRE_ENABLE_GTEST=OFF \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/djvulibre-prefix"
+          cmake --build djvulibre-build --parallel
+          cmake --install djvulibre-build
+
+      - name: Configure DjView4
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DDJVIEW_DJVU_INSTALL_DIR="${GITHUB_WORKSPACE}/djvulibre-prefix" \
+            -DDJVIEW_BUILD_TRANSLATIONS=ON \
+            -DDJVIEW_BUNDLE_DJVU_DEPS=ON
+
+      - name: Build DjView4
+        run: cmake --build build --parallel
+
+      - name: Upload artifact
+        if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: djview-linux-${{ matrix.build_type }}-x64
+          path: build/src/djview
+          if-no-files-found: warn
+
+  # -------------------------------------------------------------------------
+  linux-arm64:
+    name: Linux ARM64 ${{ matrix.build_type }}
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Release, Debug]
+
+    steps:
+      - name: Checkout DjView4Experimental
+        uses: actions/checkout@v4
+
+      - name: Checkout DjVuLibreExperimental
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          ref: ${{ env.DJVU_REF }}
+          path: DjVuLibreExperimental
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build pkg-config g++ \
+            qt6-base-dev qt6-base-dev-tools \
+            qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools \
+            libjpeg-dev libtiff-dev zlib1g-dev \
+            libgl1-mesa-dev
+
+      - name: Build and install DjVuLibre
+        run: |
+          cmake -S DjVuLibreExperimental -B djvulibre-build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DDJVULIBRE_USE_BUNDLED_DEPS=OFF \
+            -DDJVULIBRE_ENABLE_GTEST=OFF \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}/djvulibre-prefix"
+          cmake --build djvulibre-build --parallel
+          cmake --install djvulibre-build
+
+      - name: Configure DjView4
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DDJVIEW_DJVU_INSTALL_DIR="${GITHUB_WORKSPACE}/djvulibre-prefix" \
+            -DDJVIEW_BUILD_TRANSLATIONS=ON \
+            -DDJVIEW_BUNDLE_DJVU_DEPS=ON
+
+      - name: Build DjView4
+        run: cmake --build build --parallel
+
+      - name: Upload artifact
+        if: matrix.build_type == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: djview-linux-arm64-${{ matrix.build_type }}
+          path: build/src/djview
+          if-no-files-found: warn
+
+  # -------------------------------------------------------------------------
+  windows:
+    name: Windows ${{ matrix.config }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Release, Debug]
+
+    steps:
+      - name: Checkout DjView4Experimental
+        uses: actions/checkout@v4
+
+      - name: Checkout DjVuLibreExperimental
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          ref: ${{ env.DJVU_REF }}
+          path: DjVuLibreExperimental
+
+      - name: Setup vcpkg
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git vcpkg --depth 1
+          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            vcpkg/downloads
+            vcpkg/packages
+            vcpkg/installed
+          key: ${{ runner.os }}-vcpkg-qt6-${{ hashFiles('vcpkg.json', '.github/vcpkg-triplets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-vcpkg-qt6-
+
+      - name: Install Qt6 via vcpkg
+        shell: pwsh
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+        run: |
+          $triplet = if ("${{ matrix.config }}" -eq "Release") { "x64-windows-release" } else { "x64-windows" }
+          .\vcpkg\vcpkg.exe install `
+            --overlay-triplets=.github/vcpkg-triplets `
+            --triplet=$triplet `
+            qtbase qttools
+
+      - name: Build and install DjVuLibre
+        shell: pwsh
+        run: |
+          $cfg = "${{ matrix.config }}"
+          cmake -S DjVuLibreExperimental -B djvulibre-build `
+            -DDJVULIBRE_USE_BUNDLED_DEPS=ON `
+            -DDJVULIBRE_ENABLE_GTEST=OFF
+          cmake --build djvulibre-build --config $cfg --parallel
+          cmake --install djvulibre-build --config $cfg `
+            --prefix "$env:GITHUB_WORKSPACE\djvulibre-prefix"
+
+      - name: Configure DjView4
+        shell: pwsh
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+        run: |
+          $triplet = if ("${{ matrix.config }}" -eq "Release") { "x64-windows-release" } else { "x64-windows" }
+          cmake -S . -B build `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=$triplet `
+            -DDJVIEW_DJVU_INSTALL_DIR="$env:GITHUB_WORKSPACE\djvulibre-prefix" `
+            -DDJVIEW_BUILD_TRANSLATIONS=ON `
+            -DDJVIEW_BUNDLE_DJVU_DEPS=ON
+
+      - name: Build DjView4
+        run: cmake --build build --config ${{ matrix.config }} --parallel
+
+      - name: Package installer (Release only)
+        if: matrix.config == 'Release'
+        shell: pwsh
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+        run: |
+          # Install to staging directory
+          cmake --install build --config Release --prefix build/_install
+
+          # Run windeployqt to pull in Qt DLLs
+          $wdqt = "$env:VCPKG_ROOT\installed\x64-windows-release\tools\qt6\bin\windeployqt6.exe"
+          if (Test-Path $wdqt) {
+            & $wdqt --no-translations --no-compiler-runtime "build\_install\bin\djview.exe"
+          }
+
+          # Create CPack packages (ZIP + NSIS)
+          Push-Location build
+          cpack -G "ZIP;NSIS" -C Release `
+            --config CPackConfig.cmake `
+            -DCPACK_INSTALL_CMAKE_PROJECTS=".;DjView4;ALL;/"
+          Pop-Location
+
+      - name: Upload installer
+        if: matrix.config == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: djview-windows-Release-x64-installer
+          path: |
+            build/DjView4-*.exe
+            build/DjView4-*.zip
+          if-no-files-found: warn
+
+      - name: Upload debug exe
+        if: matrix.config == 'Debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: djview-windows-Debug-x64
+          path: build/src/Debug/djview.exe
+          if-no-files-found: warn
+
+  # -------------------------------------------------------------------------
+  windows-arm64:
+    name: Windows ARM64 ${{ matrix.config }}
+    runs-on: windows-11-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Release, Debug]
+
+    steps:
+      - name: Checkout DjView4Experimental
+        uses: actions/checkout@v4
+
+      - name: Checkout DjVuLibreExperimental
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ format('{0}/DjVuLibreExperimental', github.repository_owner) }}
+          ref: ${{ env.DJVU_REF }}
+          path: DjVuLibreExperimental
+
+      - name: Setup vcpkg
+        shell: pwsh
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git vcpkg --depth 1
+          .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: |
+            vcpkg/downloads
+            vcpkg/packages
+            vcpkg/installed
+          key: ${{ runner.os }}-arm64-vcpkg-qt6-${{ hashFiles('vcpkg.json', '.github/vcpkg-triplets/**') }}
+          restore-keys: |
+            ${{ runner.os }}-arm64-vcpkg-qt6-
+
+      - name: Install Qt6 via vcpkg
+        shell: pwsh
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+        run: |
+          $triplet = if ("${{ matrix.config }}" -eq "Release") { "arm64-windows-release" } else { "arm64-windows" }
+          .\vcpkg\vcpkg.exe install `
+            --overlay-triplets=.github/vcpkg-triplets `
+            --triplet=$triplet `
+            qtbase qttools
+
+      - name: Build and install DjVuLibre
+        shell: pwsh
+        run: |
+          $cfg = "${{ matrix.config }}"
+          cmake -S DjVuLibreExperimental -B djvulibre-build -A ARM64 `
+            -DDJVULIBRE_USE_BUNDLED_DEPS=ON `
+            -DDJVULIBRE_ENABLE_GTEST=OFF
+          cmake --build djvulibre-build --config $cfg --parallel
+          cmake --install djvulibre-build --config $cfg `
+            --prefix "$env:GITHUB_WORKSPACE\djvulibre-prefix"
+
+      - name: Configure DjView4
+        shell: pwsh
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+        run: |
+          $triplet = if ("${{ matrix.config }}" -eq "Release") { "arm64-windows-release" } else { "arm64-windows" }
+          cmake -S . -B build -A ARM64 `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=$triplet `
+            -DDJVIEW_DJVU_INSTALL_DIR="$env:GITHUB_WORKSPACE\djvulibre-prefix" `
+            -DDJVIEW_BUILD_TRANSLATIONS=ON `
+            -DDJVIEW_BUNDLE_DJVU_DEPS=ON
+
+      - name: Build DjView4
+        run: cmake --build build --config ${{ matrix.config }} --parallel
+
+      - name: Package installer (Release only)
+        if: matrix.config == 'Release'
+        shell: pwsh
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+        run: |
+          cmake --install build --config Release --prefix build/_install
+
+          $wdqt = "$env:VCPKG_ROOT\installed\arm64-windows-release\tools\qt6\bin\windeployqt6.exe"
+          if (Test-Path $wdqt) {
+            & $wdqt --no-translations --no-compiler-runtime "build\_install\bin\djview.exe"
+          }
+
+          Push-Location build
+          cpack -G "ZIP" -C Release `
+            --config CPackConfig.cmake `
+            -DCPACK_INSTALL_CMAKE_PROJECTS=".;DjView4;ALL;/"
+          Pop-Location
+
+      - name: Upload installer
+        if: matrix.config == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: djview-windows-arm64-Release-installer
+          path: build/DjView4-*.zip
+          if-no-files-found: warn
+
+      - name: Upload debug exe
+        if: matrix.config == 'Debug'
+        uses: actions/upload-artifact@v4
+        with:
+          name: djview-windows-arm64-Debug
+          path: build/src/Debug/djview.exe
+          if-no-files-found: warn
