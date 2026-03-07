@@ -18,32 +18,26 @@ endif()
 set(_git_info_out "${CMAKE_CURRENT_BINARY_DIR}/build_git_info.h")
 set(_git_info_script "${CMAKE_SOURCE_DIR}/cmake/GenerateBuildGitInfo.cmake")
 
-# Generate a minimal build_git_info.h at configure time (inline cmake code)
-# so the header exists before any compilation unit needs it.
-# The custom command below will overwrite it with actual git refs at build time.
-if(NOT EXISTS "${_git_info_out}")
+# Generate build_git_info.h at configure time.
+# Re-run cmake --preset ... to refresh git refs after a branch switch.
+execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -DDJVU_SOURCE_DIR=${DJVIEW_DJVU_SOURCE_DIR}
+            -DOUTPUT_FILE=${_git_info_out}
+            -P ${_git_info_script}
+    RESULT_VARIABLE _git_info_result)
+if(NOT _git_info_result EQUAL 0)
+    # Fallback stub if the script fails (e.g. git not available)
     file(WRITE "${_git_info_out}"
-"#ifndef BUILD_GIT_INFO_H\n"
-"#define BUILD_GIT_INFO_H\n"
-"#define DJVIEW_APP_GIT_REF \"unknown\"\n"
-"#define DJVIEW_LIB_GIT_REF \"unknown\"\n"
-"#endif\n"
-)
+        "#ifndef BUILD_GIT_INFO_H\n#define BUILD_GIT_INFO_H\n"
+        "#define DJVIEW_APP_GIT_REF \"unknown\"\n"
+        "#define DJVIEW_LIB_GIT_REF \"unknown\"\n"
+        "#endif\n")
 endif()
 
-# Also regenerate at build time so incremental rebuilds pick up git changes.
-add_custom_command(
-    OUTPUT  "${_git_info_out}"
-    COMMAND "${CMAKE_COMMAND}"
-            -DSOURCE_DIR="${CMAKE_SOURCE_DIR}"
-            -DDJVU_SOURCE_DIR="${DJVIEW_DJVU_SOURCE_DIR}"
-            -DOUTPUT_FILE="${_git_info_out}"
-            -P "${_git_info_script}"
-    DEPENDS "${_git_info_script}"
-    COMMENT "Updating build_git_info.h"
-    VERBATIM)
-
-add_custom_target(djview_git_info DEPENDS "${_git_info_out}")
+# Dummy target so add_dependencies(djview djview_git_info) still compiles.
+add_custom_target(djview_git_info)
 # Make the generated header visible to sources
 include_directories("${CMAKE_CURRENT_BINARY_DIR}")
 
