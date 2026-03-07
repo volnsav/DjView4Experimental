@@ -200,29 +200,36 @@ if(WIN32)
         # plugins live at:       <vcpkg>/Qt6/plugins/
         get_filename_component(_vcpkg_root "${WINDEPLOYQT_EXECUTABLE}" DIRECTORY) # tools/Qt6/bin
         get_filename_component(_vcpkg_root "${_vcpkg_root}/../../.." ABSOLUTE)    # vcpkg triplet root
-        set(_qt_plugins "${_vcpkg_root}/Qt6/plugins")
+        # Release plugins:  <vcpkg>/Qt6/plugins/
+        # Debug plugins:    <vcpkg>/debug/Qt6/plugins/
+        # Qt debug runtime verifies that loaded plugins are also debug builds,
+        # so we must select the right directory based on build config.
+        set(_qt_plugins_rel "${_vcpkg_root}/Qt6/plugins")
+        set(_qt_plugins_dbg "${_vcpkg_root}/debug/Qt6/plugins")
 
         # Copy only the plugin subdirs that djview actually needs.
-        # vcpkg ships only release-config plugins (no 'd' suffix) – they work
-        # for both Debug and Release builds of our own code.
         foreach(_plugin_subdir
-            platforms      # mandatory: qwindows.dll
+            platforms      # mandatory: qwindows(d).dll
             imageformats   # JPEG, PNG, GIF support
             styles         # QModernWindowsStyle
             tls            # HTTPS / network TLS
             networkinformation
         )
-            if(IS_DIRECTORY "${_qt_plugins}/${_plugin_subdir}")
+            # Choose debug or release plugin source dir at build time.
+            # IS_DIRECTORY is configure-time; we check the release dir as proxy
+            # (both exist if Qt is installed).
+            if(IS_DIRECTORY "${_qt_plugins_rel}/${_plugin_subdir}")
                 add_custom_command(TARGET djview POST_BUILD
                     COMMAND "${CMAKE_COMMAND}" -E copy_directory
-                        "${_qt_plugins}/${_plugin_subdir}"
+                        "$<IF:$<CONFIG:Debug>,${_qt_plugins_dbg},${_qt_plugins_rel}>/${_plugin_subdir}"
                         "$<TARGET_FILE_DIR:djview>/${_plugin_subdir}"
-                    COMMENT "Deploying Qt plugin: ${_plugin_subdir}"
+                    COMMENT "Deploying Qt plugin ($<CONFIG>): ${_plugin_subdir}"
                 )
             endif()
         endforeach()
         unset(_vcpkg_root)
-        unset(_qt_plugins)
+        unset(_qt_plugins_rel)
+        unset(_qt_plugins_dbg)
     else()
         message(WARNING "windeployqt not found – Qt plugins will NOT be deployed to the build dir")
     endif()
