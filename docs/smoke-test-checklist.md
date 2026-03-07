@@ -7,6 +7,8 @@ Use this checklist after dependency updates, renderer changes, or CI/build scrip
 - App starts without crash from clean build artifacts.
 - App starts with existing user settings (no regressions in startup behavior).
 - "About" dialog opens and shows expected app/library build info.
+  - DjVuLibre version matches the bundled `libdjvulibre.dll` (currently `3.5.30`).
+  - DjView version matches the release tag (currently `4.13`).
 
 ## 2. Document Open
 
@@ -57,6 +59,19 @@ Use this checklist after dependency updates, renderer changes, or CI/build scrip
 
 - No unexpected warnings/errors in runtime log for normal flow.
 - App exits cleanly after opening/closing several files.
+
+## 10. Windows-Specific: Runtime Dependencies
+
+When testing a freshly extracted/installed Windows build:
+
+- App starts without "DLL not found" errors.
+- All required DLLs present next to `djview.exe` (see `README.md §1.4`):
+  - `libdjvulibre.dll`, `libcrypto-3-x64.dll`, `libssl-3-x64.dll`
+  - `Qt6Core.dll`, `Qt6Gui.dll`, `Qt6Widgets.dll`, `Qt6Network.dll`
+  - `Qt6OpenGL.dll`, `Qt6OpenGLWidgets.dll`, `Qt6PrintSupport.dll`
+  - `platforms\qwindows.dll`, `styles\qmodernwindowsstyle.dll`
+- Translation files present in `share\djvu\djview4\` (`djview_uk.qm`, etc.).
+- UI appears in correct language when system locale is non-English.
 
 ## Test Notes Template
 

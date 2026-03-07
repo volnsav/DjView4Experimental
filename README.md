@@ -15,10 +15,10 @@ and the Qt toolkit.
 - implemented as reusable Qt widgets
 
 **Prerequisites:**
-- DjVuLibreExperimental (or any DjVuLibre >= 3.5.28)
-- Qt 6 (recommended) or Qt 5 >= 5.15
+- DjVuLibre >= 3.5.28 (DjVuLibreExperimental >= 3.5.30 recommended)
+- Qt 6.x (vcpkg provides 6.10 on Windows; Qt 5 >= 5.15 still supported)
 - CMake >= 3.21
-- C++14-capable compiler (GCC 9+, Clang 10+, MSVC 2019+)
+- C++17-capable compiler (GCC 9+, Clang 10+, MSVC 2022+)
 
 ---
 
@@ -101,7 +101,52 @@ Available configure presets: `windows-x64`, `windows-arm64`, `linux-x64-release`
 
 Available build presets: `windows-x64-release`, `windows-x64-debug`, `windows-arm64-release`, `linux-x64-release`, `linux-x64-debug`
 
-### 1.4 Self-contained installer (Windows)
+### 1.4 Windows runtime dependencies
+
+For a self-contained Windows distribution the following files must reside next
+to `djview.exe` (or on the system `PATH`):
+
+**Qt runtime DLLs** (deployed by `windeployqt`):
+```
+Qt6Core.dll  Qt6Gui.dll  Qt6Network.dll  Qt6OpenGL.dll
+Qt6OpenGLWidgets.dll  Qt6PrintSupport.dll  Qt6Widgets.dll
+platforms\qwindows.dll
+styles\qmodernwindowsstyle.dll
+```
+
+**Support DLLs** (bundled by vcpkg or the system):
+```
+brotlicommon.dll   brotlidec.dll    bz2.dll
+double-conversion.dll  freetype.dll  harfbuzz.dll
+icudt78.dll  icuin78.dll  icuuc78.dll
+libjpeg.dll  libpng16.dll  md4c.dll
+pcre2-16.dll  zlib1.dll  zstd.dll
+```
+
+**DjVuLibre and crypto:**
+```
+libdjvulibre.dll
+libcrypto-3-x64.dll  libssl-3-x64.dll
+```
+
+**Translations** (placed in `share\djvu\djview4\` next to the exe):
+```
+djview_cs.qm  djview_de.qm  djview_es.qm  djview_fr.qm
+djview_ru.qm  djview_uk.qm  djview_zh_cn.qm  djview_zh_tw.qm
+qt_cs.qm  qt_de.qm  qt_es.qm  qt_fr.qm  qt_ru.qm  qt_uk.qm
+qt_zh_CN.qm  qt_zh_TW.qm
+qtbase_cs.qm  qtbase_de.qm  qtbase_es.qm  qtbase_fr.qm
+qtbase_ru.qm  qtbase_uk.qm  qtbase_zh_CN.qm  qtbase_zh_TW.qm
+```
+
+> **Visual C++ Redistributable** (VC++ 2022 x64) must be installed on the
+> target machine, or the MSVC runtime DLLs (`vcruntime140.dll`,
+> `msvcp140.dll`, etc.) bundled with the installer. The NSIS installer
+> produced by CPack handles this automatically via the `/merge` directive.
+
+---
+
+### 1.5 Self-contained installer (Windows)
 
 The CMake build integrates with CPack to generate a NSIS installer (`.exe`)
 and a ZIP archive bundling `djview.exe`, all Qt DLLs, and the DjVuLibre
@@ -116,7 +161,7 @@ cd build; cpack -G "ZIP;NSIS" -C Release
 
 The resulting `DjView4-<version>-win64.exe` / `.zip` are placed in `build/`.
 
-### 1.5 Linux system install
+### 1.6 Linux system install
 
 If DjVuLibre is already installed system-wide (`libdjvulibre-dev`):
 
@@ -126,7 +171,7 @@ cmake --build build --parallel
 sudo cmake --install build
 ```
 
-### 1.6 Building on macOS
+### 1.7 Building on macOS
 
 Install Qt 6 and DjVuLibre via Homebrew:
 
