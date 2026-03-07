@@ -71,6 +71,8 @@
 #include <QImageWriter>
 #include <jpeglib.h>
 #include <setjmp.h>
+#include <jbig2enc.h>
+#include <leptonica/allheaders.h>
 #include <QList>
 #include <QMap>
 #include <QMessageBox>
@@ -1797,6 +1799,57 @@ static QByteArray encodeJpegGray(const QImage &img, int quality)
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// JBIG2 encoding helpers (Leptonica + jbig2enc).
+// Used for B&W (grayscale) pages — lossless, much smaller than JPEG.
+// ---------------------------------------------------------------------------
+
+// Convert QImage (Format_Grayscale8) to Leptonica PIX* 1bpp via threshold.
+// Dark pixels (value < 128) → foreground (1).  Caller must pixDestroy().
+static PIX *qImageToPix1bpp(const QImage &gray)
+{
+  Q_ASSERT(gray.format() == QImage::Format_Grayscale8);
+  const int w = gray.width(), h = gray.height();
+  PIX *pix = pixCreate(w, h, 1);
+  if (!pix) return nullptr;
+  const int wpl = pixGetWpl(pix);
+  for (int y = 0; y < h; y++) {
+    const uchar  *src = gray.constScanLine(y);
+    l_uint32     *dst = pixGetData(pix) + y * wpl;
+    memset(dst, 0, wpl * sizeof(l_uint32));
+    for (int x = 0; x < w; x++) {
+      if (src[x] < 128) {             // dark pixel → set (foreground)
+        // Leptonica bit layout: bit 31-k of word k/32, MSB-first.
+        dst[x >> 5] |= (0x80000000u >> (x & 31));
+      }
+    }
+  }
+  return pix;
+}
+
+// Encode a grayscale QImage as a single-page JBIG2 generic region.
+// Returns raw segment data suitable for /JBIG2Decode embedding (no globals).
+// full_headers=false → no JBIG2 file header → correct for PDF.
+static QByteArray encodeJbig2Generic(const QImage &grayImg)
+{
+  if (grayImg.isNull()) return {};
+  const QImage &gray = (grayImg.format() == QImage::Format_Grayscale8)
+                     ? grayImg
+                     : grayImg.convertToFormat(QImage::Format_Grayscale8);
+  PIX *pix = qImageToPix1bpp(gray);
+  if (!pix) return {};
+  int       len  = 0;
+  uint8_t  *data = jbig2_encode_generic(pix,
+                     /*full_headers=*/false,
+                     /*xres=*/0, /*yres=*/0,
+                     /*dup_line_removal=*/false, &len);
+  pixDestroy(&pix);
+  if (!data || len <= 0) return {};
+  QByteArray result(reinterpret_cast<const char *>(data), len);
+  free(data);   // malloced by jbig2enc
+  return result;
+}
+
 // RawPdfCharset – maps Unicode codepoints to single-byte codes for a
 // Type3 font's custom encoding (up to 254 distinct codepoints).
 
@@ -1876,34 +1929,51 @@ public:
 
   bool isOpen() const { return file_.isOpen(); }
 
-  // Add one page. jpeg must be a valid JPEG byte stream (header FF D8).
+  // Add one page.
+  // For JPEG pages (isJbig2=false): imgData must be a valid JPEG stream (FF D8).
+  // For JBIG2 pages (isJbig2=true):  imgData is a raw JBIG2 generic region
+  //   (full_headers=false output from jbig2_encode_generic), 1bpp, DeviceGray.
   bool addPage(double mmW, double mmH,
-               const QByteArray &jpeg, int imgW, int imgH,
-               bool isGray,
+               const QByteArray &imgData, int imgW, int imgH,
+               bool isGray, bool isJbig2,
                const QVector<PdfWordZone> &words)
   {
     if (!file_.isOpen()) return false;
-    if (jpeg.isEmpty() || (unsigned char)(jpeg[0]) != 0xFF
-                       || (unsigned char)(jpeg[1]) != 0xD8)
-      return false;  // caller must supply a valid JPEG
+    if (imgData.isEmpty()) return false;
+    if (!isJbig2) {
+      // Validate JPEG header
+      if ((unsigned char)(imgData[0]) != 0xFF
+       || (unsigned char)(imgData[1]) != 0xD8)
+        return false;
+    }
 
     // Page dimensions in PDF points (1 pt = 1/72 inch).
     const double ptW = mmW / 25.4 * 72.0;
     const double ptH = mmH / 25.4 * 72.0;
 
-    // --- Image XObject (DCT stream) ---
+    // --- Image XObject ---
     const int imgObj = alloc();
     beginObj(imgObj);
-    write(baf(
-      "<< /Type /XObject /Subtype /Image\n"
-      "   /Width %d /Height %d\n"
-      "   /ColorSpace %s /BitsPerComponent 8\n"
-      "   /Filter /DCTDecode /Length %d >>\n"
-      "stream\n",
-      imgW, imgH,
-      isGray ? "/DeviceGray" : "/DeviceRGB",
-      (int)jpeg.size()));
-    file_.write(jpeg);
+    if (isJbig2) {
+      write(baf(
+        "<< /Type /XObject /Subtype /Image\n"
+        "   /Width %d /Height %d\n"
+        "   /ColorSpace /DeviceGray /BitsPerComponent 1\n"
+        "   /Filter /JBIG2Decode /Length %d >>\n"
+        "stream\n",
+        imgW, imgH, (int)imgData.size()));
+    } else {
+      write(baf(
+        "<< /Type /XObject /Subtype /Image\n"
+        "   /Width %d /Height %d\n"
+        "   /ColorSpace %s /BitsPerComponent 8\n"
+        "   /Filter /DCTDecode /Length %d >>\n"
+        "stream\n",
+        imgW, imgH,
+        isGray ? "/DeviceGray" : "/DeviceRGB",
+        (int)imgData.size()));
+    }
+    file_.write(imgData);
     write("\nendstream\n");
     endObj();
 
@@ -2355,6 +2425,7 @@ QDjViewPdfTextExporter::doPage()
   }
 
   const int pageType = (int)ddjvu_page_get_type(*page);
+  const bool isBitonal = (pageType == (int)DDJVU_PAGETYPE_BITONAL);
   if (logFile_.isOpen()) {
     QByteArray line = "page=" + QByteArray::number(pageno + 1)
       + " srcW=" + QByteArray::number(srcW)
@@ -2364,6 +2435,7 @@ QDjViewPdfTextExporter::doPage()
       + " renderH=" + QByteArray::number(renderH)
       + " type=" + QByteArray::number(pageType)
       + " gray=" + QByteArray(useGray ? "1" : "0")
+      + " bitonal=" + QByteArray(isBitonal ? "1" : "0")
       + " renderOk=" + (renderOk ? "1" : "0")
       + "\n";
     logFile_.write(line);
@@ -2378,24 +2450,45 @@ QDjViewPdfTextExporter::doPage()
       pdfCollectWords(textExpr, words);
   }
 
-  // Compress to JPEG.
-  // For grayscale images (bitonal/B&W compound pages) use libjpeg directly
-  // to guarantee 1-channel encoding — Qt's JPEG plugin up-converts Grayscale8
-  // to RGB, losing all size benefit.
+  // Encode the page image.
+  // BITONAL pages: JBIG2 (lossless 1bpp — no anti-aliasing, safe to threshold).
+  // Grayscale compound pages: grayscale JPEG (anti-aliased render — JBIG2
+  //   binarization would destroy soft edges).
+  // Color pages: RGB JPEG.
   const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
   const bool isGrayImg = (qimg.format() == QImage::Format_Grayscale8);
-  QByteArray jpeg;
-  if (isGrayImg) {
-    jpeg = encodeJpegGray(qimg, jpegQ);
-    if (jpeg.isEmpty()) {
-      // libjpeg failed — fall back to RGB QImageWriter
+  QByteArray imgData;
+  bool isJbig2 = false;
+
+  if (isGrayImg && isBitonal) {
+    // Truly 1bpp page — JBIG2 is safe and gives best compression.
+    imgData = encodeJbig2Generic(qimg);
+    if (!imgData.isEmpty()) {
+      isJbig2 = true;
+    } else {
+      // JBIG2 failed — fall back to grayscale JPEG via libjpeg
+      if (logFile_.isOpen()) logFile_.write("  encodeJbig2 FAILED, fallback gray JPEG\n");
+      imgData = encodeJpegGray(qimg, jpegQ);
+      if (imgData.isEmpty()) {
+        // libjpeg failed — fall back to RGB QImageWriter
+        if (logFile_.isOpen()) logFile_.write("  encodeJpegGray FAILED, fallback RGB\n");
+        QImage rgb = qimg.convertToFormat(QImage::Format_RGB888);
+        QBuffer b(&imgData); b.open(QIODevice::WriteOnly);
+        QImageWriter w(&b, "JPEG"); w.setQuality(jpegQ); w.write(rgb);
+      }
+    }
+  } else if (isGrayImg) {
+    // Grayscale compound/photo — anti-aliased render, use gray JPEG (not JBIG2).
+    imgData = encodeJpegGray(qimg, jpegQ);
+    if (imgData.isEmpty()) {
       if (logFile_.isOpen()) logFile_.write("  encodeJpegGray FAILED, fallback RGB\n");
       QImage rgb = qimg.convertToFormat(QImage::Format_RGB888);
-      QBuffer b(&jpeg); b.open(QIODevice::WriteOnly);
+      QBuffer b(&imgData); b.open(QIODevice::WriteOnly);
       QImageWriter w(&b, "JPEG"); w.setQuality(jpegQ); w.write(rgb);
     }
   } else {
-    QBuffer buf(&jpeg);
+    // Color page — RGB JPEG via Qt plugin.
+    QBuffer buf(&imgData);
     buf.open(QIODevice::WriteOnly);
     QImageWriter writer(&buf, "JPEG");
     writer.setQuality(jpegQ);
@@ -2404,14 +2497,14 @@ QDjViewPdfTextExporter::doPage()
         logFile_.write("  JPEG encode FAILED: " + writer.errorString().toUtf8() + "\n");
       qWarning("DjView PDF export: page %d JPEG encode failed: %s",
                pageno + 1, qPrintable(writer.errorString()));
-      jpeg.clear();
+      imgData.clear();
     }
   }
-  if (jpeg.isEmpty()) {
-    // Last resort: white page in RGB
+  if (imgData.isEmpty()) {
+    // Last resort: white page in RGB JPEG
     QImage white(renderW, renderH, QImage::Format_RGB888);
     white.fill(Qt::white);
-    QBuffer b2(&jpeg); b2.open(QIODevice::WriteOnly);
+    QBuffer b2(&imgData); b2.open(QIODevice::WriteOnly);
     QImageWriter w2(&b2, "JPEG"); w2.setQuality(75);
     if (!w2.write(white)) {
       if (logFile_.isOpen()) logFile_.write("  fallback white RGB JPEG FAILED\n");
@@ -2422,10 +2515,11 @@ QDjViewPdfTextExporter::doPage()
   }
 
   if (logFile_.isOpen())
-    logFile_.write("  jpegSize=" + QByteArray::number(jpeg.size()) + "\n");
+    logFile_.write("  " + QByteArray(isJbig2 ? "jbig2Size=" : "jpegSize=")
+                   + QByteArray::number(imgData.size()) + "\n");
 
-  const bool addOk = rawPdf->addPage(mmW, mmH, jpeg, renderW, renderH,
-                                      isGrayImg, words);
+  const bool addOk = rawPdf->addPage(mmW, mmH, imgData, renderW, renderH,
+                                      isGrayImg, isJbig2, words);
   if (logFile_.isOpen())
     logFile_.write("  addPage=" + QByteArray(addOk ? "OK" : "FAILED") + "\n");
   if (!addOk)
