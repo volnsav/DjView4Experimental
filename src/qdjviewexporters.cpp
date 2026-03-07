@@ -2553,15 +2553,87 @@ QDjViewPdfTextExporter::doPage()
   // black text) and IW44 background; use layered BG+FG PDF rendering instead.
   bool forceJbig2 = isBitonalEarly;
 
-  // For COMPOUND pages: render BG (IW44) and FG (Sjbz+FGbz stencil) as
-  // separate layers and composite them in the PDF with Multiply blend mode.
-  //   Multiply: white FG → BG unchanged; black FG → black; gray FG (k) → BG*k.
-  // This exactly replicates DjVu compositing for pages with FGbz colors.
+  // For COMPOUND pages: probe the FG (foreground) render to decide encoding:
+  //   - FG has only black/white pixels (FGbz=1 color) → JBIG2 via RENDER_BLACK
+  //     stencil at native DPI, same as BITONAL. Small file, perfect quality.
+  //   - FG has gray pixels (FGbz=2+ colors, e.g. black+gray fills) → layered
+  //     BG+FG Multiply PDF: preserves gray fills at cost of larger FG JPEG.
   const ddjvu_page_type_t earlyType = ddjvu_page_get_type(*page);
   if (earlyType == DDJVU_PAGETYPE_COMPOUND && renderMode == DDJVU_RENDER_COLOR) {
     const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
 
-    // Background layer: IW44 background rendered at reduced DPI (small file).
+    // Render FG at reduced DPI to probe for gray pixels (cheap).
+    ddjvu_rect_t fgrect; fgrect.x = fgrect.y = 0;
+    fgrect.w = (unsigned)renderW; fgrect.h = (unsigned)renderH;
+    ddjvu_format_t *fmtFg = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+    ddjvu_format_set_row_order(fmtFg, 1);
+    ddjvu_format_set_gamma(fmtFg, 2.2);
+    QImage fgImg(renderW, renderH, QImage::Format_RGB888);
+    fgImg.fill(Qt::white);
+    ddjvu_page_render(*page, DDJVU_RENDER_FOREGROUND, &fgrect, &fgrect, fmtFg,
+                      fgImg.bytesPerLine(), reinterpret_cast<char *>(fgImg.bits()));
+    ddjvu_format_release(fmtFg);
+
+    // Check for intermediate gray: sample FG pixels converted to gray.
+    // "Pure B&W stencil" means every pixel is either near-white (≥236)
+    // or near-black (≤19). Any value in 20–235 means FGbz has gray colors.
+    QImage fgGray = fgImg.convertToFormat(QImage::Format_Grayscale8);
+    bool fgHasGray = false;
+    {
+      const uchar *bits = fgGray.constBits();
+      const int total = fgGray.width() * fgGray.height();
+      const int step  = qMax(1, total / 3000);
+      for (int px = 0; px < total && !fgHasGray; px += step) {
+        const uchar v = bits[px];
+        if (v >= 20 && v <= 235) fgHasGray = true;
+      }
+    }
+
+    if (!fgHasGray) {
+      // FGbz is pure black — safe to use RENDER_BLACK + JBIG2 (like BITONAL).
+      ddjvu_rect_t brect; brect.x = brect.y = 0;
+      brect.w = (unsigned)srcW; brect.h = (unsigned)srcH;
+      ddjvu_format_t *fmtB = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+      ddjvu_format_set_row_order(fmtB, 1);
+      QImage bimg(srcW, srcH, QImage::Format_RGB888);
+      bimg.fill(Qt::white);
+      bool blackOk = ddjvu_page_render(*page, DDJVU_RENDER_BLACK, &brect, &brect,
+                                        fmtB, bimg.bytesPerLine(),
+                                        reinterpret_cast<char *>(bimg.bits()));
+      ddjvu_format_release(fmtB);
+      if (blackOk) {
+        QImage bGray = bimg.convertToFormat(QImage::Format_Grayscale8);
+        QByteArray jbig2Data = encodeJbig2Generic(bGray);
+        QVector<PdfWordZone> words;
+        if (ui.textLayerCheckBox->isChecked() && document) {
+          miniexp_t textExpr = document->getPageText(pageno);
+          if (textExpr != miniexp_dummy && textExpr != miniexp_nil)
+            pdfCollectWords(textExpr, words);
+        }
+        if (logFile_.isOpen()) {
+          logFile_.write("page=" + QByteArray::number(pageno + 1)
+            + " srcW=" + QByteArray::number(srcW)
+            + " srcH=" + QByteArray::number(srcH)
+            + " imgdpi=" + QByteArray::number(imgdpi)
+            + " renderW=" + QByteArray::number(renderW)
+            + " renderH=" + QByteArray::number(renderH)
+            + " type=3 gray=1 bitonal=0 jbig2=1 renderOk=1 [COMPOUND_JBIG2]\n"
+            + "  jbig2Size=" + QByteArray::number(jbig2Data.size()) + "\n");
+          logFile_.flush();
+        }
+        const bool addOk = rawPdf->addPage(
+          mmW, mmH, jbig2Data, srcW, srcH, true, true, words);
+        if (logFile_.isOpen())
+          logFile_.write("  addPage=" + QByteArray(addOk ? "OK" : "FAILED") + "\n");
+        if (!addOk)
+          error(tr("Failed to write PDF page %1.").arg(pageno + 1), __FILE__, __LINE__);
+        return;
+      }
+      // fall through to BG+FG Multiply if RENDER_BLACK failed
+    }
+
+    // FG has gray pixels (multi-color FGbz) — use layered BG+FG Multiply.
+    // Background layer at reduced DPI.
     ddjvu_rect_t bgrect; bgrect.x = bgrect.y = 0;
     bgrect.w = (unsigned)renderW; bgrect.h = (unsigned)renderH;
     ddjvu_format_t *fmtBg = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
@@ -2573,7 +2645,6 @@ QDjViewPdfTextExporter::doPage()
                       bgImg.bytesPerLine(), reinterpret_cast<char *>(bgImg.bits()));
     ddjvu_format_release(fmtBg);
 
-    // Check whether the BG is grayscale or color.
     bool bgIsGray = false;
     {
       const uchar *bits = bgImg.constBits();
@@ -2597,23 +2668,8 @@ QDjViewPdfTextExporter::doPage()
       QImageWriter bw(&bb, "JPEG"); bw.setQuality(jpegQ);
       bw.write(bgImg);
     }
+    QByteArray fgData = encodeJpegGray(fgGray, jpegQ);
 
-    // Foreground layer: Sjbz stencil colored by FGbz, at same render DPI as BG.
-    // Multiply blend works at any resolution — no need for native DPI.
-    ddjvu_rect_t fgrect; fgrect.x = fgrect.y = 0;
-    fgrect.w = (unsigned)renderW; fgrect.h = (unsigned)renderH;
-    ddjvu_format_t *fmtFg = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
-    ddjvu_format_set_row_order(fmtFg, 1);
-    ddjvu_format_set_gamma(fmtFg, 2.2);
-    QImage fgImg(renderW, renderH, QImage::Format_RGB888);
-    fgImg.fill(Qt::white);
-    ddjvu_page_render(*page, DDJVU_RENDER_FOREGROUND, &fgrect, &fgrect, fmtFg,
-                      fgImg.bytesPerLine(), reinterpret_cast<char *>(fgImg.bits()));
-    ddjvu_format_release(fmtFg);
-    QByteArray fgData = encodeJpegGray(
-      fgImg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
-
-    // Collect text words (coordinate scaling uses renderW/H dimensions).
     QVector<PdfWordZone> words;
     if (ui.textLayerCheckBox->isChecked() && document) {
       miniexp_t textExpr = document->getPageText(pageno);
