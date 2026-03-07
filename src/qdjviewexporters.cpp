@@ -2107,12 +2107,14 @@ public:
   }
 
   // Add a compound (layered) page:
-  //   BG = DDJVU_RENDER_BACKGROUND JPEG (low-res IW44 background).
-  //   FG = DDJVU_RENDER_FOREGROUND gray JPEG (Sjbz stencil coloured by FGbz).
-  // They are composited in the PDF with Multiply blend mode:
-  //   white FG (1.0) → background shows through unchanged.
-  //   black FG (0.0) → output is black (text).
-  //   gray  FG (k)   → background darkened by factor k (gray fills).
+  //   BG = RENDER_COLOR JPEG at renderDpi — carries all visual content
+  //        (IW44 photo, FGbz gray fills, anti-aliased text at low res).
+  //   FG = RENDER_BLACK JBIG2 stencil at native DPI as PDF /ImageMask:
+  //        bit 0 = paint black ink, bit 1 = transparent.
+  // Result: sharp black text/lines (from JBIG2) over correct background
+  // (photo + gray fills from JPEG).  Gray FGbz fills are correctly
+  // rendered in the background JPEG; the stencil repaints them black if
+  // they occupy Sjbz bits — an acceptable trade-off vs blurry text.
   bool addCompoundPage(double mmW, double mmH,
                        const QByteArray &bgData, int bgW, int bgH, bool bgIsGray,
                        const QByteArray &fgData, int fgW, int fgH,
@@ -2124,7 +2126,7 @@ public:
     const double ptW = mmW / 25.4 * 72.0;
     const double ptH = mmH / 25.4 * 72.0;
 
-    // Background image XObject.
+    // Background image XObject (JPEG, gray or RGB).
     const int bgObj = alloc();
     beginObj(bgObj);
     write(baf(
@@ -2138,33 +2140,32 @@ public:
     write("\nendstream\n");
     endObj();
 
-    // Foreground image XObject (gray JPEG, composited with Multiply).
+    // Foreground stencil XObject (JBIG2 1bpp, drawn as image mask).
+    // /ImageMask true + default /Decode [0 1]:
+    //   decoded value 0 (= raw bit 0 = text pixel) → paint current color
+    //   decoded value 1 (= raw bit 1 = background) → transparent
     const int fgObj = alloc();
     beginObj(fgObj);
     write(baf(
       "<< /Type /XObject /Subtype /Image\n"
       "   /Width %d /Height %d\n"
-      "   /ColorSpace /DeviceGray /BitsPerComponent 8\n"
-      "   /Filter /DCTDecode /Length %d >>\n"
+      "   /ImageMask true /BitsPerComponent 1\n"
+      "   /Filter /JBIG2Decode /Length %d >>\n"
       "stream\n",
       fgW, fgH, (int)fgData.size()));
     file_.write(fgData);
     write("\nendstream\n");
     endObj();
 
-    // ExtGState: Multiply blend mode for the foreground layer.
-    const int gsObj = alloc();
-    beginObj(gsObj);
-    write("<< /Type /ExtGState /BM /Multiply >>\n");
-    endObj();
-
     // Content stream.
-    // Text coordinate scaling: DjVu pixels (at FG/native DPI) → PDF points.
+    // Text coordinate scaling: DjVu pixels at FG (native) DPI → PDF points.
     const double sx = ptW / fgW;
     const double sy = ptH / fgH;
     QByteArray cs;
+    // 1) Draw background JPEG filling the page.
     cs += baf("q\n%.4f 0 0 %.4f 0 0 cm\n/BG Do\nQ\n", ptW, ptH);
-    cs += baf("q\n/GSmul gs\n%.4f 0 0 %.4f 0 0 cm\n/FG Do\nQ\n", ptW, ptH);
+    // 2) Set current color to black; draw stencil as opaque mask on top.
+    cs += baf("q\n0 g\n%.4f 0 0 %.4f 0 0 cm\n/FG Do\nQ\n", ptW, ptH);
     if (!words.isEmpty()) {
       cs += "BT\n3 Tr\n";
       for (const PdfWordZone &w : words) {
@@ -2195,7 +2196,7 @@ public:
     write("\nendstream\n");
     endObj();
 
-    // Page object.
+    // Page object (no ExtGState needed — no blend modes).
     const int pageObj = alloc();
     beginObj(pageObj);
     write(baf(
@@ -2203,9 +2204,8 @@ public:
       "   /MediaBox [0 0 %.4f %.4f]\n"
       "   /Contents %d 0 R\n"
       "   /Resources << /XObject << /BG %d 0 R /FG %d 0 R >>\n"
-      "                 /ExtGState << /GSmul %d 0 R >>\n"
       "                 /Font << /F0 3 0 R >> >> >>\n",
-      ptW, ptH, csObj, bgObj, fgObj, gsObj));
+      ptW, ptH, csObj, bgObj, fgObj));
     endObj();
 
     pageObjs_.append(pageObj);
@@ -2615,40 +2615,50 @@ QDjViewPdfTextExporter::doPage()
     useGray = !hasColor;
   }
 
-  // COMPOUND pages that passed the chroma check (useGray=true) have no
-  // significant color background — treat them as text-only and encode with
-  // JBIG2 at native DPI for sharp, small output.
-  // COMPOUND pages with color (photo/IW44 background) fall through to JPEG.
+  // COMPOUND pages: BG = RENDER_COLOR JPEG at renderDpi (all visual content:
+  // photo, gray fills, text at low-res) + FG = RENDER_BLACK JBIG2 stencil at
+  // native DPI drawn as /ImageMask (sharp black text/lines on top).
+  // BITONAL pages: skip this path, go straight to JBIG2-only below.
   bool forceJbig2 = isBitonalEarly;
   const ddjvu_page_type_t earlyType = ddjvu_page_get_type(*page);
-  if (earlyType == DDJVU_PAGETYPE_COMPOUND && useGray
-      && renderMode == DDJVU_RENDER_COLOR) {
-    QByteArray jbig2Data = encodeJbig2BlackRender(*page, srcW, srcH);
+  if (earlyType == DDJVU_PAGETYPE_COMPOUND && renderMode == DDJVU_RENDER_COLOR) {
     const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
-    if (jbig2Data.isEmpty())
-      jbig2Data = encodeJpegGray(qimg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
-    QVector<PdfWordZone> words;
-    if (ui.textLayerCheckBox->isChecked() && document) {
-      miniexp_t textExpr = document->getPageText(pageno);
-      if (textExpr != miniexp_dummy && textExpr != miniexp_nil)
-        pdfCollectWords(textExpr, words);
+    // BG: encode the already-rendered RENDER_COLOR image as JPEG.
+    QByteArray bgData;
+    const bool bgIsGray = useGray;
+    if (bgIsGray) {
+      bgData = encodeJpegGray(qimg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
+    } else {
+      QBuffer buf(&bgData); buf.open(QIODevice::WriteOnly);
+      QImageWriter writer(&buf, "JPEG"); writer.setQuality(jpegQ);
+      writer.write(qimg);
     }
-    const bool isJbig2out = !jbig2Data.isEmpty()
-                         && ((unsigned char)jbig2Data[0] != 0xFF);
-    if (logFile_.isOpen()) {
-      logFile_.write("page=" + QByteArray::number(pageno + 1)
-        + " srcW=" + QByteArray::number(srcW)
-        + " srcH=" + QByteArray::number(srcH)
-        + " type=3 gray=1 [COMPOUND_JBIG2]\n"
-        + (isJbig2out ? "  jbig2Size=" : "  jpegSize=")
-        + QByteArray::number(jbig2Data.size()) + "\n");
-      logFile_.flush();
+    // FG: 1bpp JBIG2 stencil from RENDER_BLACK at native DPI.
+    QByteArray fgData = encodeJbig2BlackRender(*page, srcW, srcH);
+    if (!bgData.isEmpty() && !fgData.isEmpty()) {
+      QVector<PdfWordZone> words;
+      if (ui.textLayerCheckBox->isChecked() && document) {
+        miniexp_t textExpr = document->getPageText(pageno);
+        if (textExpr != miniexp_dummy && textExpr != miniexp_nil)
+          pdfCollectWords(textExpr, words);
+      }
+      if (logFile_.isOpen()) {
+        logFile_.write("page=" + QByteArray::number(pageno + 1)
+          + " srcW=" + QByteArray::number(srcW) + " srcH=" + QByteArray::number(srcH)
+          + " renderW=" + QByteArray::number(renderW) + " renderH=" + QByteArray::number(renderH)
+          + " type=3 gray=" + QByteArray(bgIsGray ? "1" : "0") + " [COMPOUND_BG+FG]\n"
+          + "  bgSize=" + QByteArray::number(bgData.size())
+          + " fgSize=" + QByteArray::number(fgData.size()) + "\n");
+        logFile_.flush();
+      }
+      const bool addOk = rawPdf->addCompoundPage(
+        mmW, mmH, bgData, renderW, renderH, bgIsGray,
+        fgData, srcW, srcH, words);
+      if (!addOk)
+        error(tr("Failed to write PDF page %1.").arg(pageno + 1), __FILE__, __LINE__);
+      return;
     }
-    const bool addOk = rawPdf->addPage(mmW, mmH, jbig2Data, srcW, srcH,
-                                        true, isJbig2out, words);
-    if (!addOk)
-      error(tr("Failed to write PDF page %1.").arg(pageno + 1), __FILE__, __LINE__);
-    return;
+    // fallback: fall through to single-image JPEG path
   }
 
   if (useGray) {
