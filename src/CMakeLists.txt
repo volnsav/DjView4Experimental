@@ -227,6 +227,16 @@ if(WIN32)
                 )
             endif()
         endforeach()
+        # jpeg62.dll is a transitive dependency of qjpeg(d).dll but is NOT
+        # picked up by TARGET_RUNTIME_DLLS (loaded at runtime by the plugin).
+        # Copy it explicitly so the JPEG imageformat plugin can load.
+        add_custom_command(TARGET djview POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "$<IF:$<CONFIG:Debug>,${_vcpkg_root}/debug/bin,${_vcpkg_root}/bin>/jpeg62.dll"
+                "$<TARGET_FILE_DIR:djview>/jpeg62.dll"
+            COMMENT "Deploying jpeg62.dll ($<CONFIG>)"
+        )
+
         unset(_vcpkg_root)
         unset(_qt_plugins_rel)
         unset(_qt_plugins_dbg)
