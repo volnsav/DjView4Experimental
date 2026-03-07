@@ -2598,13 +2598,14 @@ QDjViewPdfTextExporter::doPage()
       bw.write(bgImg);
     }
 
-    // Foreground layer: Sjbz stencil colored by FGbz, at native DPI.
+    // Foreground layer: Sjbz stencil colored by FGbz, at same render DPI as BG.
+    // Multiply blend works at any resolution — no need for native DPI.
     ddjvu_rect_t fgrect; fgrect.x = fgrect.y = 0;
-    fgrect.w = (unsigned)srcW; fgrect.h = (unsigned)srcH;
+    fgrect.w = (unsigned)renderW; fgrect.h = (unsigned)renderH;
     ddjvu_format_t *fmtFg = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
     ddjvu_format_set_row_order(fmtFg, 1);
     ddjvu_format_set_gamma(fmtFg, 2.2);
-    QImage fgImg(srcW, srcH, QImage::Format_RGB888);
+    QImage fgImg(renderW, renderH, QImage::Format_RGB888);
     fgImg.fill(Qt::white);
     ddjvu_page_render(*page, DDJVU_RENDER_FOREGROUND, &fgrect, &fgrect, fmtFg,
                       fgImg.bytesPerLine(), reinterpret_cast<char *>(fgImg.bits()));
@@ -2612,7 +2613,7 @@ QDjViewPdfTextExporter::doPage()
     QByteArray fgData = encodeJpegGray(
       fgImg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
 
-    // Collect text words (coordinate scaling uses FG/native DPI dimensions).
+    // Collect text words (coordinate scaling uses renderW/H dimensions).
     QVector<PdfWordZone> words;
     if (ui.textLayerCheckBox->isChecked() && document) {
       miniexp_t textExpr = document->getPageText(pageno);
@@ -2634,7 +2635,7 @@ QDjViewPdfTextExporter::doPage()
     }
 
     const bool addOk = rawPdf->addCompoundPage(
-      mmW, mmH, bgData, renderW, renderH, bgIsGray, fgData, srcW, srcH, words);
+      mmW, mmH, bgData, renderW, renderH, bgIsGray, fgData, renderW, renderH, words);
     if (logFile_.isOpen())
       logFile_.write("  addPage=" + QByteArray(addOk ? "OK" : "FAILED") + "\n");
     if (!addOk)
