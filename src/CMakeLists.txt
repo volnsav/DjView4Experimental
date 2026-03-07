@@ -162,6 +162,24 @@ find_package(JPEG REQUIRED)
 target_link_libraries(djview PRIVATE JPEG::JPEG)
 
 # ---------------------------------------------------------------------------
+# jbig2enc – JBIG2 encoding for 1bpp B&W pages (much better than JPEG/G4).
+# Fetched from upstream at configure time; Leptonica supplied via vcpkg.
+# ---------------------------------------------------------------------------
+include(FetchContent)
+find_package(Leptonica REQUIRED)   # vcpkg supplies this (leptonica port)
+FetchContent_Declare(jbig2enc
+    GIT_REPOSITORY https://github.com/agl/jbig2enc
+    GIT_TAG        master
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(jbig2enc)
+target_link_libraries(djview PRIVATE libjbig2enc ${Leptonica_LIBRARIES})
+target_include_directories(djview PRIVATE
+    "${jbig2enc_SOURCE_DIR}/src"
+    ${Leptonica_INCLUDE_DIRS}
+)
+
+# ---------------------------------------------------------------------------
 # Compile definitions
 # ---------------------------------------------------------------------------
 target_compile_definitions(djview PRIVATE

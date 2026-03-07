@@ -2445,9 +2445,12 @@ QDjViewPdfTextExporter::doPage()
   // For compound B&W pages rendered in COLOR mode: re-render with
   // RENDER_BLACK at native DPI to get the pure JB2 stencil layer.
   // RENDER_BLACK has no anti-aliasing → safe for JBIG2 threshold.
-  // This mirrors what DjVuToy does (encode stencil separately).
+  // Only for COMPOUND type — PHOTO pages have actual halftone/grayscale
+  // content that RENDER_BLACK would crush to solid black.
   bool forceJbig2 = isBitonalEarly;   // BITONAL already handled above
-  if (useGray && !isBitonalEarly && renderMode == DDJVU_RENDER_COLOR) {
+  const ddjvu_page_type_t earlyType = ddjvu_page_get_type(*page);
+  if (useGray && !isBitonalEarly && renderMode == DDJVU_RENDER_COLOR
+      && earlyType == DDJVU_PAGETYPE_COMPOUND) {
     ddjvu_rect_t brect; brect.x = brect.y = 0;
     brect.w = (unsigned)srcW;
     brect.h = (unsigned)srcH;
