@@ -2084,6 +2084,7 @@ private:
   QPointer<QWidget>    settingsPage;
   QString              outFileName;
   RawPdfWriter        *rawPdf;
+  QFile                logFile_;
 };
 
 
@@ -2184,6 +2185,14 @@ QDjViewPdfTextExporter::propertyPage(int num)
 void
 QDjViewPdfTextExporter::closeFile()
 {
+  if (logFile_.isOpen()) {
+    if (curStatus > DDJVU_JOB_OK)
+      logFile_.write(QByteArray("EXPORT FAILED status=")
+                     + QByteArray::number((int)curStatus) + "\n");
+    else
+      logFile_.write("EXPORT OK\n");
+    logFile_.close();
+  }
   if (!rawPdf) return;
   if (curStatus > DDJVU_JOB_OK)
     rawPdf->abandon();   // delete partial file on failure
@@ -2200,6 +2209,13 @@ QDjViewPdfTextExporter::save(QString fname)
   if (rawPdf) return false;   // already running
   outFileName = fname;
   const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
+  // Open debug log next to the PDF file.
+  logFile_.setFileName(fname + ".log");
+  (void)logFile_.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text);
+  if (logFile_.isOpen())
+    logFile_.write(QByteArray("PDF export log: ") + fname.toUtf8() + "\n"
+                   "dpi=" + QByteArray::number(ui.dpiSpinBox->value())
+                   + " jpegQ=" + QByteArray::number(jpegQ) + "\n");
   rawPdf = new RawPdfWriter();
   if (!rawPdf->open(fname, jpegQ)) {
     delete rawPdf;
@@ -2255,6 +2271,21 @@ QDjViewPdfTextExporter::doPage()
   ddjvu_format_release(fmt);
   if (!renderOk) qimg.fill(Qt::white);
 
+  const int pageType = (int)ddjvu_page_get_type(*page);
+  if (logFile_.isOpen()) {
+    QByteArray line = "page=" + QByteArray::number(pageno + 1)
+      + " srcW=" + QByteArray::number(srcW)
+      + " srcH=" + QByteArray::number(srcH)
+      + " imgdpi=" + QByteArray::number(imgdpi)
+      + " renderW=" + QByteArray::number(renderW)
+      + " renderH=" + QByteArray::number(renderH)
+      + " type=" + QByteArray::number(pageType)
+      + " renderOk=" + (renderOk ? "1" : "0")
+      + "\n";
+    logFile_.write(line);
+    logFile_.flush();
+  }
+
   // Collect invisible text words (if requested).
   QVector<PdfWordZone> words;
   if (ui.textLayerCheckBox->isChecked() && document) {
@@ -2272,6 +2303,8 @@ QDjViewPdfTextExporter::doPage()
     QImageWriter writer(&buf, "JPEG");
     writer.setQuality(qBound(1, ui.jpegQualitySpinBox->value(), 100));
     if (!writer.write(qimg)) {
+      if (logFile_.isOpen())
+        logFile_.write("  JPEG encode FAILED: " + writer.errorString().toUtf8() + "\n");
       // JPEG encode failed: substitute a white page and continue export.
       qWarning("DjView PDF export: page %d JPEG encode failed: %s",
                pageno + 1, qPrintable(writer.errorString()));
@@ -2281,6 +2314,8 @@ QDjViewPdfTextExporter::doPage()
       white.fill(Qt::white);
       QImageWriter w2(&buf2, "JPEG"); w2.setQuality(75);
       if (!w2.write(white)) {
+        if (logFile_.isOpen())
+          logFile_.write("  fallback white JPEG FAILED: " + w2.errorString().toUtf8() + "\n");
         error(tr("Failed to write PDF page %1: JPEG plugin unavailable.")
               .arg(pageno + 1), __FILE__, __LINE__);
         return;
@@ -2288,7 +2323,13 @@ QDjViewPdfTextExporter::doPage()
     }
   }
 
-  if (!rawPdf->addPage(mmW, mmH, jpeg, renderW, renderH, words))
+  if (logFile_.isOpen())
+    logFile_.write("  jpegSize=" + QByteArray::number(jpeg.size()) + "\n");
+
+  const bool addOk = rawPdf->addPage(mmW, mmH, jpeg, renderW, renderH, words);
+  if (logFile_.isOpen())
+    logFile_.write("  addPage=" + QByteArray(addOk ? "OK" : "FAILED") + "\n");
+  if (!addOk)
     error(tr("Failed to write PDF page %1.").arg(pageno + 1), __FILE__, __LINE__);
 }
 
