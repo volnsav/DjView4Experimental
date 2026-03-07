@@ -1,4 +1,4 @@
-//C-  -*- C++ -*-
+﻿//C-  -*- C++ -*-
 //C- -------------------------------------------------------------------
 //C- DjView4
 //C- Copyright (c) 2006-  Leon Bottou
@@ -59,6 +59,8 @@
 
 #include <QApplication>
 #include <QBuffer>
+#include <cstdarg>
+#include <cstdio>
 #include <QCheckBox>
 #include <QDebug>
 #include <QDir>
@@ -1703,29 +1705,24 @@ QDjViewTiffExporter::doPage()
 // QDJVIEWPDFTEXTEXPORTER
 //
 // PDF exporter with optional invisible text overlay ("sandwich PDF").
-// Uses QPdfWriter + QPainter – no TIFF/tiff2pdf dependency required.
+// Writes PDF 1.4 directly – bypasses QPdfWriter which in Qt6 always uses
+// FlateDecode (zlib) for images. Direct writing ensures DCT (JPEG) streams.
 
 #include "ui_qdjviewexportpdf.h"
 
 // Word-level zone collected from the DjVu hidden-text tree.
 struct PdfWordZone {
-  QRect   djvuRect;   // bounding box in DjVu pixels (bottom-left, y-up)
+  QRect   djvuRect;   // DjVu pixels, bottom-left origin, y increases upward
   QString text;
 };
 
 // Recursively collect word-level zones from a miniexp text expression.
-// The DjVu text tree has the form:
-//   (keyword x1 y1 x2 y2  child1 child2 ...)  -- non-terminal
-//   (keyword x1 y1 x2 y2  "string")            -- terminal (word/char)
 static void
 pdfCollectWords(miniexp_t p, QVector<PdfWordZone> &words)
 {
-  if (!miniexp_consp(p))
-    return;
-  if (!miniexp_symbolp(miniexp_car(p)))
+  if (!miniexp_consp(p) || !miniexp_symbolp(miniexp_car(p)))
     return;
   miniexp_t r = miniexp_cdr(p);
-  // Read bounding-box integers x1 y1 x2 y2.
   if (!miniexp_consp(r) || !miniexp_numberp(miniexp_car(r))) return;
   int x1 = miniexp_to_int(miniexp_car(r)); r = miniexp_cdr(r);
   if (!miniexp_consp(r) || !miniexp_numberp(miniexp_car(r))) return;
@@ -1735,7 +1732,6 @@ pdfCollectWords(miniexp_t p, QVector<PdfWordZone> &words)
   if (!miniexp_consp(r) || !miniexp_numberp(miniexp_car(r))) return;
   int y2 = miniexp_to_int(miniexp_car(r)); r = miniexp_cdr(r);
   if (x2 < x1 || y2 < y1) return;
-  // Terminal node: next child is a string.
   if (miniexp_consp(r) && miniexp_stringp(miniexp_car(r))) {
     const char *s = miniexp_to_str(miniexp_car(r));
     if (s && *s) {
@@ -1745,13 +1741,337 @@ pdfCollectWords(miniexp_t p, QVector<PdfWordZone> &words)
       words.append(z);
     }
   } else {
-    // Non-terminal: recurse into children.
     while (miniexp_consp(r)) {
       pdfCollectWords(miniexp_car(r), words);
       r = miniexp_cdr(r);
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// RawPdfCharset – maps Unicode codepoints to single-byte codes for a
+// Type3 font's custom encoding (up to 254 distinct codepoints).
+
+// Local printf-into-QByteArray helper used throughout the PDF writer.
+static QByteArray baf(const char *fmt, ...)
+{
+  char buf[1024];
+  va_list ap; va_start(ap, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  return QByteArray(buf);
+}
+
+class RawPdfCharset {
+public:
+  // Encode a codepoint; returns the byte code (allocates on first use).
+  // Returns 0xFF if the table is full.
+  uint8_t encode(uint32_t u) {
+    auto it = u2c_.find(u);
+    if (it != u2c_.end()) return it.value();
+    if (nextCode_ > 253)  return 0xFF;
+    uint8_t code = nextCode_++;
+    u2c_[u] = code;
+    c2u_.resize(nextCode_, 0);
+    c2u_[code] = u;
+    return code;
+  }
+
+  // Encode every character in s into a byte-string.
+  QByteArray encodeString(const QString &s) {
+    QByteArray out;
+    out.reserve(s.size());
+    for (const QChar c : s) {
+      uint8_t b = encode((uint32_t)c.unicode());
+      out += (char)b;
+    }
+    return out;
+  }
+
+  // List of "code /uniXXXX" pairs for the /Differences array.
+  QByteArray buildDifferences() const {
+    QByteArray d;
+    for (int i = 0; i < (int)c2u_.size(); ++i)
+      d += baf(" %d /uni%04X", i, (unsigned)c2u_[i]);
+    return d;
+  }
+
+  int      size()           const { return (int)c2u_.size(); }
+  uint32_t unicode(int idx) const { return c2u_.value(idx, '?'); }
+
+private:
+  QMap<uint32_t, uint8_t> u2c_;
+  QVector<uint32_t>       c2u_;
+  uint8_t nextCode_ = 0;
+};
+
+// ---------------------------------------------------------------------------
+// RawPdfWriter – minimal PDF 1.4 writer.
+//   * JPEG images embedded as DCT streams (true JPEG, respects quality setting)
+//   * Invisible text layer via a Type3 font with ToUnicode CMap (Tr=3)
+//   * Standard xref/trailer
+
+class RawPdfWriter {
+public:
+  explicit RawPdfWriter() {}
+
+  bool open(const QString &path, int jpegQuality) {
+    jpegQ_ = qBound(1, jpegQuality, 100);
+    file_.setFileName(path);
+    if (!file_.open(QIODevice::WriteOnly | QIODevice::Truncate))
+      return false;
+    nextObj_ = 4;  // 1=Catalog 2=Pages 3=Font written in finalize()
+    xref_.clear(); pageObjs_.clear(); charset_ = RawPdfCharset();
+    write("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+    return true;
+  }
+
+  bool isOpen() const { return file_.isOpen(); }
+
+  // Render one page. qimg must be Format_RGB32.
+  // djvuImgDpi: DjVu page resolution (determines coordinate scale to PDF pts).
+  bool addPage(double mmW, double mmH,
+               const QImage &qimg, int djvuImgDpi,
+               const QVector<PdfWordZone> &words)
+  {
+    if (!file_.isOpen()) return false;
+    const int imgW = qimg.width();
+    const int imgH = qimg.height();
+
+    // Compress to JPEG.
+    QByteArray jpeg;
+    {
+      QBuffer buf(&jpeg);
+      buf.open(QIODevice::WriteOnly);
+      qimg.save(&buf, "JPEG", jpegQ_);
+    }
+    // Safety: verify JPEG header; if empty, skip page.
+    if (jpeg.isEmpty() || (unsigned char)jpeg[0] != 0xFF
+                       || (unsigned char)jpeg[1] != 0xD8)
+      return false;
+
+    // Page dimensions in PDF points (1 pt = 1/72 inch).
+    const double ptW = mmW / 25.4 * 72.0;
+    const double ptH = mmH / 25.4 * 72.0;
+
+    // --- Image XObject (DCT stream) ---
+    const int imgObj = alloc();
+    beginObj(imgObj);
+    write(baf(
+      "<< /Type /XObject /Subtype /Image\n"
+      "   /Width %d /Height %d\n"
+      "   /ColorSpace /DeviceRGB /BitsPerComponent 8\n"
+      "   /Filter /DCTDecode /Length %d >>\n"
+      "stream\n",
+      imgW, imgH, (int)jpeg.size()));
+    file_.write(jpeg);
+    write("\nendstream\n");
+    endObj();
+
+    // --- Content stream ---
+    // Coordinate note: DjVu text coords are in DjVu-pixel space, origin
+    // bottom-left, y increases upward — the same orientation as PDF user space.
+    // Scale factor: DjVu pixels → PDF points = ptW/imgW (horizontal),
+    //                                           ptH/imgH (vertical).
+    const double sx = ptW  / imgW;
+    const double sy = ptH  / imgH;
+
+    QByteArray cs;
+    cs += baf(
+      "q\n%.4f 0 0 %.4f 0 0 cm\n/Im Do\nQ\n", ptW, ptH);
+
+    if (!words.isEmpty()) {
+      cs += "BT\n3 Tr\n";   // Tr=3: invisible rendering mode
+      for (const PdfWordZone &w : words) {
+        if (w.text.isEmpty()) continue;
+        const double x1  = w.djvuRect.left()   * sx;
+        const double y1  = w.djvuRect.top()     * sy;  // bottom of word
+        const double wPt = w.djvuRect.width()   * sx;
+        const double hPt = w.djvuRect.height()  * sy;
+        if (wPt <= 0.0 || hPt <= 0.0) continue;
+        // Horizontal scale: stretch to fill word zone.
+        // Approximate Helvetica avg advance = 0.5 × em height.
+        const int    nch    = qMax(1, w.text.size());
+        const double scaleX = wPt / (0.5 * hPt * nch);
+        QByteArray encoded  = charset_.encodeString(w.text);
+        // Hex-encode the string: <AABB...>
+        QByteArray hex;
+        hex.reserve(encoded.size() * 2);
+        for (unsigned char byte : encoded)
+          hex += baf("%02X", (unsigned)byte);
+        // Text matrix [a 0 0 d e f]: a=scaleX*hPt, d=hPt, (e,f)=position.
+        cs += baf(
+          "/F0 1 Tf\n%.4f 0 0 %.4f %.4f %.4f Tm\n<%s> Tj\n",
+          scaleX * hPt, hPt, x1, y1, hex.constData());
+      }
+      cs += "ET\n";
+    }
+
+    const int csObj = alloc();
+    beginObj(csObj);
+    write(baf("<< /Length %d >>\nstream\n", (int)cs.size()));
+    file_.write(cs);
+    write("\nendstream\n");
+    endObj();
+
+    // --- Page object ---
+    const int pageObj = alloc();
+    beginObj(pageObj);
+    write(baf(
+      "<< /Type /Page /Parent 2 0 R\n"
+      "   /MediaBox [0 0 %.4f %.4f]\n"
+      "   /Contents %d 0 R\n"
+      "   /Resources << /XObject << /Im %d 0 R >>\n"
+      "                 /Font << /F0 3 0 R >> >> >>\n",
+      ptW, ptH, csObj, imgObj));
+    endObj();
+
+    pageObjs_.append(pageObj);
+    return true;
+  }
+
+  // Flush cross-ref table and trailer. Returns false on I/O error.
+  bool finalize() {
+    if (!file_.isOpen()) return false;
+
+    writeFont();   // obj 3
+
+    // Pages object (obj 2).
+    beginObj(2);
+    QByteArray kids = "[";
+    for (int p : pageObjs_) kids += QByteArray::number(p) + " 0 R ";
+    kids += "]";
+    write(baf(
+      "<< /Type /Pages /Kids %s /Count %d >>\n",
+      kids.constData(), (int)pageObjs_.size()));
+    endObj();
+
+    // Catalog (obj 1).
+    beginObj(1);
+    write("<< /Type /Catalog /Pages 2 0 R >>\n");
+    endObj();
+
+    // Cross-reference table.
+    const qint64 xrefPos = file_.pos();
+    write(baf("xref\n0 %d\n", nextObj_));
+    write("0000000000 65535 f \n");
+    for (int i = 1; i < nextObj_; ++i)
+      write(baf("%010lld 00000 n \n",
+                                 (long long)xref_.value(i, 0)));
+
+    write(baf(
+      "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%lld\n%%%%EOF\n",
+      nextObj_, (long long)xrefPos));
+
+    file_.close();
+    return true;
+  }
+
+  void abandon() {
+    QString fn = file_.fileName();
+    file_.close();
+    if (!fn.isEmpty()) QFile::remove(fn);
+  }
+
+private:
+  QFile             file_;
+  QMap<int, qint64> xref_;
+  int               nextObj_ = 4;
+  QVector<int>      pageObjs_;
+  RawPdfCharset     charset_;
+  int               jpegQ_   = 75;
+
+  int alloc() { return nextObj_++; }
+
+  void beginObj(int n) {
+    xref_[n] = file_.pos();
+    file_.write(QByteArray::number(n) + " 0 obj\n");
+  }
+  void endObj()                     { file_.write("endobj\n"); }
+  void write(const QByteArray &b)   { file_.write(b); }
+  void write(const char *s)         { file_.write(s); }
+
+  // Write the Type3 font (object 3) with ToUnicode CMap.
+  void writeFont() {
+    const int sz = charset_.size();
+
+    // Empty glyph proc shared by all characters ("0 0 d0" = zero width, no paint).
+    const QByteArray glyphStream("0 0 d0\n");
+    const int glyphObj = alloc();
+    beginObj(glyphObj);
+    write(baf("<< /Length %d >>\nstream\n",
+                               (int)glyphStream.size()));
+    file_.write(glyphStream);
+    write("\nendstream\n");
+    endObj();
+
+    // ToUnicode CMap stream.
+    QByteArray cmap;
+    cmap += "/CIDInit /ProcSet findresource begin\n"
+            "12 dict begin\nbegincmap\n"
+            "/CMapName /DjView-Text def\n"
+            "/CMapType 1 def\n"
+            "/CIDSystemInfo << /Registry (DjView) /Ordering (Text)"
+            " /Supplement 0 >> def\n";
+    cmap += baf(
+      "1 begincodespacerange\n<00> <%02X>\nendcodespacerange\n",
+      sz > 0 ? sz - 1 : 0);
+    for (int base = 0; base < sz; base += 100) {
+      const int end = qMin(base + 100, sz);
+      cmap += baf("%d beginbfchar\n", end - base);
+      for (int i = base; i < end; ++i) {
+        uint32_t u = charset_.unicode(i);
+        if (u < 0x10000) {
+          cmap += baf("<%02X> <%04X>\n", i, u);
+        } else {
+          u -= 0x10000;
+          cmap += baf("<%02X> <%04X%04X>\n", i,
+                                       (unsigned)(0xD800 + (u >> 10)),
+                                       (unsigned)(0xDC00 + (u & 0x3FF)));
+        }
+      }
+      cmap += "endbfchar\n";
+    }
+    cmap += "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
+
+    const int cmapObj = alloc();
+    beginObj(cmapObj);
+    write(baf("<< /Length %d >>\nstream\n", (int)cmap.size()));
+    file_.write(cmap);
+    write("\nendstream\n");
+    endObj();
+
+    // CharProcs: every glyph name → same empty glyph object.
+    QByteArray charProcs = "<<\n";
+    for (int i = 0; i < sz; ++i)
+      charProcs += baf("  /uni%04X %d 0 R\n",
+                                        (unsigned)charset_.unicode(i), glyphObj);
+    charProcs += ">>";
+
+    // Widths: all 1 (unit width in glyph space; actual visual width is 0).
+    QByteArray widths = "[";
+    for (int i = 0; i < sz; ++i) widths += "1 ";
+    widths += "]";
+
+    // Font object (obj 3).
+    beginObj(3);
+    write(baf(
+      "<< /Type /Font /Subtype /Type3\n"
+      "   /FontBBox [0 0 1 1]\n"
+      "   /FontMatrix [0.001 0 0 0.001 0 0]\n"
+      "   /FirstChar 0 /LastChar %d\n"
+      "   /Widths %s\n"
+      "   /CharProcs %s\n"
+      "   /Encoding << /Type /Encoding /Differences [0%s] >>\n"
+      "   /ToUnicode %d 0 R >>\n",
+      sz > 0 ? sz - 1 : 0,
+      widths.constData(),
+      charProcs.constData(),
+      charset_.buildDifferences().constData(),
+      cmapObj));
+    endObj();
+  }
+};
 
 
 class QDjViewPdfTextExporter : public QDjViewPageExporter
@@ -1776,9 +2096,7 @@ private:
   Ui::QDjViewExportPdf ui;
   QPointer<QWidget>    settingsPage;
   QString              outFileName;
-  QPdfWriter          *pdfWriter;
-  QPainter            *painter;
-  bool                 firstPage;
+  RawPdfWriter        *rawPdf;
 };
 
 
@@ -1804,7 +2122,7 @@ QDjViewPdfTextExporter::setup()
 QDjViewPdfTextExporter::QDjViewPdfTextExporter(QDialog *parent, QDjView *djview,
                                                QString  name)
   : QDjViewPageExporter(parent, djview, name),
-    pdfWriter(nullptr), painter(nullptr), firstPage(true)
+    rawPdf(nullptr)
 {
   settingsPage = new QWidget();
   ui.setupUi(settingsPage);
@@ -1879,33 +2197,28 @@ QDjViewPdfTextExporter::propertyPage(int num)
 void
 QDjViewPdfTextExporter::closeFile()
 {
-  if (painter) {
-    if (painter->isActive())
-      painter->end();
-    delete painter;
-    painter = nullptr;
-  }
-  delete pdfWriter;
-  pdfWriter = nullptr;
-  // On failure, remove the partial output file.
-  if (curStatus > DDJVU_JOB_OK && !outFileName.isEmpty())
-    QFile::remove(outFileName);
+  if (!rawPdf) return;
+  if (curStatus > DDJVU_JOB_OK)
+    rawPdf->abandon();   // delete partial file on failure
+  else
+    rawPdf->finalize();
+  delete rawPdf;
+  rawPdf = nullptr;
 }
 
 
 bool
 QDjViewPdfTextExporter::save(QString fname)
 {
-  if (pdfWriter)        // already running
-    return false;
+  if (rawPdf) return false;   // already running
   outFileName = fname;
-  firstPage   = true;
-  pdfWriter   = new QPdfWriter(fname);
-  pdfWriter->setCreator(QStringLiteral("DjView4"));
-  const int outputDpi = qBound(72, ui.dpiSpinBox->value(), 1200);
-  pdfWriter->setResolution(outputDpi);
-  pdfWriter->setPageMargins(QMarginsF(0, 0, 0, 0));
-  painter = new QPainter();
+  const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
+  rawPdf = new RawPdfWriter();
+  if (!rawPdf->open(fname, jpegQ)) {
+    delete rawPdf;
+    rawPdf = nullptr;
+    return false;
+  }
   return start();
 }
 
@@ -1915,46 +2228,22 @@ QDjViewPdfTextExporter::doPage()
 {
   QDjVuPage     *page     = curPage;
   QDjVuDocument *document = djview->getDocument();
-  const int pageno = page->pageNo();
-  const int imgdpi = ddjvu_page_get_resolution(*page);
-  const int outDpi = pdfWriter->resolution();
-  const int srcW   = ddjvu_page_get_width(*page);
-  const int srcH   = ddjvu_page_get_height(*page);
+  const int pageno  = page->pageNo();
+  const int imgdpi  = ddjvu_page_get_resolution(*page);
+  const int srcW    = ddjvu_page_get_width(*page);
+  const int srcH    = ddjvu_page_get_height(*page);
 
-  // Physical page size derived from the DjVu page's own DPI.
+  // Physical page dimensions derived from DjVu page's own DPI.
   const double mmW = srcW * 25.4 / imgdpi;
   const double mmH = srcH * 25.4 / imgdpi;
 
-  // Painter coordinates are at outDpi dots/inch.
-  // Full-page painter rect: outDpi px per inch × physical size.
-  const int pageW = (srcW * outDpi + imgdpi / 2) / imgdpi;
-  const int pageH = (srcH * outDpi + imgdpi / 2) / imgdpi;
-
-  // Render the DjVu page at min(imgdpi, outDpi) to avoid upscaling.
+  // Render at min(imgdpi, outDpi) to avoid unnecessary upscaling.
+  const int outDpi    = qBound(72, ui.dpiSpinBox->value(), 1200);
   const int renderDpi = qMin(imgdpi, outDpi);
   const int renderW   = (srcW * renderDpi + imgdpi / 2) / imgdpi;
   const int renderH   = (srcH * renderDpi + imgdpi / 2) / imgdpi;
 
-  // Set physical page size BEFORE begin() / newPage().
-  pdfWriter->setPageSize(QPageSize(QSizeF(mmW, mmH), QPageSize::Millimeter));
-  pdfWriter->setPageMargins(QMarginsF(0, 0, 0, 0));
-
-  // Start painter on first page; advance on subsequent pages.
-  if (firstPage) {
-    if (!painter->begin(pdfWriter)) {
-      error(tr("Cannot open PDF output file."), __FILE__, __LINE__);
-      return;
-    }
-    firstPage = false;
-  } else {
-    pdfWriter->newPage();
-  }
-
-  // Render DjVu page directly into a Format_RGB32 QImage.
-  // Using RGBMASK32 (same as QDjViewImgExporter) renders into the image's
-  // own buffer – no intermediate copy, and Format_RGB32 has no alpha channel
-  // so QPdfEngine will embed it as DCT/JPEG (compact) instead of
-  // FlateDecode/zlib (5-8× larger).
+  // Determine render mode from viewer's current display setting.
   ddjvu_render_mode_t renderMode = DDJVU_RENDER_COLOR;
   {
     QDjVuWidget::DisplayMode dm = djview->getDjVuWidget()->displayMode();
@@ -1962,100 +2251,34 @@ QDjViewPdfTextExporter::doPage()
     else if (dm == QDjVuWidget::DISPLAY_BG)      renderMode = DDJVU_RENDER_BACKGROUND;
     else if (dm == QDjVuWidget::DISPLAY_FG)      renderMode = DDJVU_RENDER_FOREGROUND;
   }
-  ddjvu_rect_t rect;
-  rect.x = rect.y = 0;
+
+  // Render into Format_RGB32 (no alpha → JPEG-compatible).
+  unsigned int masks[4] = { 0xff0000, 0xff00, 0xff, 0xff000000 };
+  ddjvu_format_t *fmt = ddjvu_format_create(DDJVU_FORMAT_RGBMASK32, 4, masks);
+  ddjvu_format_set_row_order(fmt, 1);
+  ddjvu_format_set_gamma(fmt, 2.2);
+  ddjvu_rect_t rect; rect.x = rect.y = 0;
   rect.w = (unsigned)renderW;
   rect.h = (unsigned)renderH;
 
-  // ARGB masks matching QImage::Format_RGB32 memory layout (0x00RRGGBB).
-  unsigned int masks[4] = { 0xff0000, 0xff00, 0xff, 0xff000000 };
-  ddjvu_format_t *fmt = ddjvu_format_create(DDJVU_FORMAT_RGBMASK32, 4, masks);
-  ddjvu_format_set_row_order(fmt, 1);   // top-to-bottom
-  ddjvu_format_set_gamma(fmt, 2.2);
-
   QImage qimg(renderW, renderH, QImage::Format_RGB32);
-  qimg.fill(Qt::white);   // safe default if render is partial
-
+  qimg.fill(Qt::white);
   const bool renderOk = ddjvu_page_render(
-        *page, renderMode, &rect, &rect, fmt,
-        qimg.bytesPerLine(),
-        reinterpret_cast<char *>(qimg.bits()));
+    *page, renderMode, &rect, &rect, fmt,
+    qimg.bytesPerLine(), reinterpret_cast<char *>(qimg.bits()));
   ddjvu_format_release(fmt);
+  if (!renderOk) qimg.fill(Qt::white);
 
-  if (!renderOk)
-    qimg.fill(Qt::white);   // render not ready – show white rather than garbage
-
-  // Optional: pre-compress to JPEG at the user's quality setting so the
-  // final PDF embeds the image at that quality rather than QPdfEngine's
-  // fixed default (~75).  On failure we keep the original RGB32 image
-  // (QPdfEngine will still use JPEG, just at its own quality level).
-  const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
-  if (jpegQ != 75) {   // skip round-trip when quality matches Qt's default
-    QByteArray jpegBuf;
-    QBuffer    jbuf(&jpegBuf);
-    jbuf.open(QIODevice::WriteOnly);
-    if (qimg.save(&jbuf, "JPEG", jpegQ)) {
-      jbuf.close();
-      QImage decoded = QImage::fromData(jpegBuf, "JPEG");
-      if (!decoded.isNull())
-        qimg = decoded;   // Format_RGB888, hasAlphaChannel()==false → still JPEG in PDF
-    }
-  }
-
-  // ---- 1. Draw the raster image, scaled to fill the physical page --------
-  painter->drawImage(QRect(0, 0, pageW, pageH), qimg);
-
-  // ---- 2. Invisible text overlay (searchable PDF) -----------------------
+  // Collect invisible text words (if requested).
+  QVector<PdfWordZone> words;
   if (ui.textLayerCheckBox->isChecked() && document) {
     miniexp_t textExpr = document->getPageText(pageno);
-    if (textExpr != miniexp_dummy && textExpr != miniexp_nil) {
-      QVector<PdfWordZone> words;
+    if (textExpr != miniexp_dummy && textExpr != miniexp_nil)
       pdfCollectWords(textExpr, words);
-      if (!words.isEmpty()) {
-        //
-        // DjVu text coords: imgdpi, bottom-left origin, y increases upward.
-        // QPainter coords:  outDpi, top-left origin,    y increases downward.
-        //
-        //   painterX       = djvuX * (outDpi / imgdpi)
-        //   painterY (top) = pageH - djvuY2 * (outDpi / imgdpi)  (y2 = top in DjVu)
-        //
-        const double scale = static_cast<double>(outDpi) / imgdpi;
-        painter->save();
-        painter->setOpacity(0.0);  // invisible; text remains in stream for search/copy
-        QFont font = painter->font();
-        for (const PdfWordZone &w : words) {
-          if (w.text.isEmpty()) continue;
-          // djvuRect.left()   = x1 (DjVu left)
-          // djvuRect.top()    = y1 (DjVu bottom — QRect uses top-left convention,
-          //                         but DjVu coords are passed as-is)
-          // djvuRect.width()  = x2 - x1
-          // djvuRect.height() = y2 - y1
-          const double left    = w.djvuRect.left()                               * scale;
-          const double right   = (w.djvuRect.left()  + w.djvuRect.width())      * scale;
-          const double djvuTop = w.djvuRect.top() + w.djvuRect.height();  // y2 (DjVu top)
-          const double djvuBot = w.djvuRect.top();                         // y1 (DjVu bottom)
-          const double ptop    = pageH - djvuTop * scale;   // painter y of word top
-          const double pbot    = pageH - djvuBot * scale;   // painter y of word bottom
-          const double wZone   = right - left;
-          const double hZone   = pbot  - ptop;
-          if (wZone <= 0 || hZone <= 0) continue;
-          font.setPixelSize(qMax(1, static_cast<int>(hZone)));
-          painter->setFont(font);
-          QFontMetricsF fm(font, pdfWriter);
-          const double textW = fm.horizontalAdvance(w.text);
-          if (textW <= 0) continue;
-          painter->save();
-          painter->translate(left, ptop);
-          // Scale horizontally so the text word exactly fills the zone width.
-          painter->scale(wZone / textW, 1.0);
-          // Draw at approximate baseline (~85 % of zone height from top).
-          painter->drawText(QPointF(0, hZone * 0.85), w.text);
-          painter->restore();
-        }
-        painter->restore();  // restore opacity=1
-      }
-    }
   }
+
+  if (!rawPdf->addPage(mmW, mmH, qimg, imgdpi, words))
+    error(tr("Failed to write PDF page %1.").arg(pageno + 1), __FILE__, __LINE__);
 }
 
 
