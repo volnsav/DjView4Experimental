@@ -2395,6 +2395,28 @@ QDjViewPdfTextExporter::doPage()
   if (!renderOk) qimg.fill(Qt::white);
 
   // NOW type is known (decode completed during render).
+  // For BITONAL pages rendered at reduced DPI: re-render at native DPI so
+  // that the hard threshold binarization doesn't destroy fine details
+  // (chess diagrams, thin lines, small font strokes etc.).
+  // The page is already decoded so re-render is essentially free.
+  const bool isBitonalEarly = (ddjvu_page_get_type(*page) == DDJVU_PAGETYPE_BITONAL);
+  if (isBitonalEarly && renderDpi < imgdpi) {
+    const int nativeW = srcW;
+    const int nativeH = srcH;
+    ddjvu_rect_t nrect; nrect.x = nrect.y = 0;
+    nrect.w = (unsigned)nativeW;
+    nrect.h = (unsigned)nativeH;
+    ddjvu_format_t *fmt2 = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+    ddjvu_format_set_row_order(fmt2, 1);
+    ddjvu_format_set_gamma(fmt2, 2.2);
+    QImage nimg(nativeW, nativeH, QImage::Format_RGB888);
+    nimg.fill(Qt::white);
+    if (ddjvu_page_render(*page, renderMode, &nrect, &nrect, fmt2,
+                          nimg.bytesPerLine(), reinterpret_cast<char *>(nimg.bits())))
+      qimg = std::move(nimg);   // replace with native-DPI image
+    ddjvu_format_release(fmt2);
+  }
+
   // Convert to grayscale if:
   //   a) page is explicitly BITONAL — never has color, or
   //   b) stencil/black render mode, or
@@ -2407,7 +2429,7 @@ QDjViewPdfTextExporter::doPage()
               || (renderMode == DDJVU_RENDER_BLACK);
   if (!useGray && qimg.format() == QImage::Format_RGB888) {
     const uchar *bits = qimg.constBits();
-    const int   total = renderW * renderH;
+    const int   total = qimg.width() * qimg.height();
     const int   step  = qMax(1, total / 2000); // sample ~2000 pixels
     bool hasColor = false;
     for (int px = 0; px < total && !hasColor; px += step) {
@@ -2433,6 +2455,8 @@ QDjViewPdfTextExporter::doPage()
       + " imgdpi=" + QByteArray::number(imgdpi)
       + " renderW=" + QByteArray::number(renderW)
       + " renderH=" + QByteArray::number(renderH)
+      + " imgW=" + QByteArray::number(qimg.width())
+      + " imgH=" + QByteArray::number(qimg.height())
       + " type=" + QByteArray::number(pageType)
       + " gray=" + QByteArray(useGray ? "1" : "0")
       + " bitonal=" + QByteArray(isBitonal ? "1" : "0")
@@ -2502,7 +2526,7 @@ QDjViewPdfTextExporter::doPage()
   }
   if (imgData.isEmpty()) {
     // Last resort: white page in RGB JPEG
-    QImage white(renderW, renderH, QImage::Format_RGB888);
+    QImage white(qimg.width(), qimg.height(), QImage::Format_RGB888);
     white.fill(Qt::white);
     QBuffer b2(&imgData); b2.open(QIODevice::WriteOnly);
     QImageWriter w2(&b2, "JPEG"); w2.setQuality(75);
@@ -2518,7 +2542,7 @@ QDjViewPdfTextExporter::doPage()
     logFile_.write("  " + QByteArray(isJbig2 ? "jbig2Size=" : "jpegSize=")
                    + QByteArray::number(imgData.size()) + "\n");
 
-  const bool addOk = rawPdf->addPage(mmW, mmH, imgData, renderW, renderH,
+  const bool addOk = rawPdf->addPage(mmW, mmH, imgData, qimg.width(), qimg.height(),
                                       isGrayImg, isJbig2, words);
   if (logFile_.isOpen())
     logFile_.write("  addPage=" + QByteArray(addOk ? "OK" : "FAILED") + "\n");
