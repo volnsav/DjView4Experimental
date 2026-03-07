@@ -2689,44 +2689,82 @@ QDjViewPdfTextExporter::doPage()
         }
       }
     }
-    // FG: probe RENDER_FOREGROUND at renderDpi to detect gray fills.
-    // If FGbz assigns gray colors to any Sjbz region, RENDER_FOREGROUND will
-    // have pixels that are neither white (255) nor black (<10).
-    // If gray fills found: FG = RENDER_FOREGROUND gray JPEG + Multiply blend
-    //   (preserves gray fills, text at 300dpi JPEG quality).
-    // If only black text: FG = RENDER_BLACK JBIG2 stencil as /ImageMask
-    //   (pixel-perfect text at native DPI, no gray fill issue).
-    bool hasFgbzGray = false;
-    QImage fgImg;
+    // Decide FG mode by checking whether the gray fills are already in
+    // RENDER_BACKGROUND (IW44) or only in FGbz (stencil colorization):
+    //
+    //  - If RENDER_BACKGROUND already has significant dark/gray content
+    //    (non-white pixels), those fills are in IW44 → BG JPEG already
+    //    carries them → use sharp JBIG2 ImageMask (no Multiply needed).
+    //
+    //  - If BG is nearly all white but RENDER_FOREGROUND has gray pixels,
+    //    the gray fills live only in FGbz → must use Multiply with
+    //    RENDER_FOREGROUND gray JPEG to preserve them (text will be 300dpi
+    //    JPEG quality in this case).
+    //
+    bool bgHasGrayContent = false;
+    if (!bgData.isEmpty()) {
+      // Re-examine the already-rendered bgImg via its JPEG would be lossy;
+      // instead re-check the pixel data we still have in bgImg.
+      // We need bgImg from the render above — capture it outside the block.
+    }
+    // Re-render BG into a persistent image for the gray-content probe.
+    QImage bgImgProbe;
+    bool fgNeedsMultiply = false;
     {
-      ddjvu_rect_t frect; frect.x = frect.y = 0;
-      frect.w = (unsigned)renderW; frect.h = (unsigned)renderH;
-      ddjvu_format_t *fmtFg = ddjvu_format_create(DDJVU_FORMAT_GREY8, 0, nullptr);
-      ddjvu_format_set_row_order(fmtFg, 1);
-      QImage tmp(renderW, renderH, QImage::Format_Grayscale8);
-      tmp.fill(Qt::white);
-      if (ddjvu_page_render(*page, DDJVU_RENDER_FOREGROUND,
-                            &frect, &frect, fmtFg,
-                            tmp.bytesPerLine(),
-                            reinterpret_cast<char *>(tmp.bits()))) {
-        // Sample for gray pixels: value in (10, 245) = not black, not white.
-        const uchar *bits = tmp.constBits();
-        const int total = renderW * renderH;
-        const int step = qMax(1, total / 2000);
-        for (int px = 0; px < total && !hasFgbzGray; px += step) {
-          const uchar v = bits[px];
-          if (v > 10 && v < 245) hasFgbzGray = true;
-        }
-        if (hasFgbzGray) fgImg = std::move(tmp);
+      ddjvu_rect_t brect2; brect2.x = brect2.y = 0;
+      brect2.w = (unsigned)renderW; brect2.h = (unsigned)renderH;
+      // Use a small subsample for speed: render at renderDpi (already done),
+      // just re-use the GREY8 format for the probe.
+      ddjvu_format_t *fmtProbe = ddjvu_format_create(DDJVU_FORMAT_GREY8, 0, nullptr);
+      ddjvu_format_set_row_order(fmtProbe, 1);
+      QImage probeImg(renderW, renderH, QImage::Format_Grayscale8);
+      probeImg.fill(Qt::white);
+      if (ddjvu_page_render(*page, DDJVU_RENDER_BACKGROUND,
+                            &brect2, &brect2, fmtProbe,
+                            probeImg.bytesPerLine(),
+                            reinterpret_cast<char *>(probeImg.bits()))) {
+        // Count pixels darker than 210 (covers light grays like table headers).
+        const uchar *bits2 = probeImg.constBits();
+        const int total2 = renderW * renderH;
+        const int step2  = qMax(1, total2 / 2000);
+        int darkCount = 0;
+        for (int px = 0; px < total2; px += step2)
+          if (bits2[px] < 210) ++darkCount;
+        // If >2% of sampled pixels are non-white → IW44 has the gray fills.
+        bgHasGrayContent = (darkCount > (total2 / step2) / 50);
       }
-      ddjvu_format_release(fmtFg);
+      ddjvu_format_release(fmtProbe);
+
+      if (!bgHasGrayContent) {
+        // BG is nearly white → probe RENDER_FOREGROUND for FGbz gray.
+        ddjvu_rect_t frect2; frect2.x = frect2.y = 0;
+        frect2.w = (unsigned)renderW; frect2.h = (unsigned)renderH;
+        ddjvu_format_t *fmtFg2 = ddjvu_format_create(DDJVU_FORMAT_GREY8, 0, nullptr);
+        ddjvu_format_set_row_order(fmtFg2, 1);
+        QImage fgProbe(renderW, renderH, QImage::Format_Grayscale8);
+        fgProbe.fill(Qt::white);
+        if (ddjvu_page_render(*page, DDJVU_RENDER_FOREGROUND,
+                              &frect2, &frect2, fmtFg2,
+                              fgProbe.bytesPerLine(),
+                              reinterpret_cast<char *>(fgProbe.bits()))) {
+          const uchar *fgBits = fgProbe.constBits();
+          const int total3 = renderW * renderH;
+          const int step3  = qMax(1, total3 / 2000);
+          for (int px = 0; px < total3 && !fgNeedsMultiply; px += step3) {
+            const uchar v = fgBits[px];
+            if (v > 10 && v < 245) fgNeedsMultiply = true;
+          }
+          if (fgNeedsMultiply) bgImgProbe = std::move(fgProbe);
+        }
+        ddjvu_format_release(fmtFg2);
+      }
     }
     QByteArray fgData;
     bool fgIsJbig2 = false;
     int  fgW = renderW, fgH = renderH;
-    if (hasFgbzGray) {
-      // Multiply path: FG = RENDER_FOREGROUND gray JPEG.
-      fgData = encodeJpegGray(fgImg, jpegQ);
+    if (fgNeedsMultiply) {
+      // True FGbz-only gray fills: Multiply with RENDER_FOREGROUND gray JPEG.
+      fgData = encodeJpegGray(bgImgProbe, jpegQ);
     } else {
       // ImageMask path: FG = RENDER_BLACK JBIG2 at native DPI.
       fgData = encodeJbig2BlackRender(*page, srcW, srcH);
@@ -2745,7 +2783,8 @@ QDjViewPdfTextExporter::doPage()
           + " srcW=" + QByteArray::number(srcW) + " srcH=" + QByteArray::number(srcH)
           + " renderW=" + QByteArray::number(renderW) + " renderH=" + QByteArray::number(renderH)
           + " type=3 gray=" + QByteArray(bgIsGray ? "1" : "0")
-          + " fgGray=" + QByteArray(hasFgbzGray ? "1" : "0")
+          + " bgGray=" + QByteArray(bgHasGrayContent ? "1" : "0")
+          + " fgMul=" + QByteArray(fgNeedsMultiply ? "1" : "0")
           + " [" + QByteArray(fgIsJbig2 ? "COMPOUND_JBIG2" : "COMPOUND_MULTIPLY") + "]\n"
           + "  bgSize=" + QByteArray::number(bgData.size())
           + " fgSize=" + QByteArray::number(fgData.size()) + "\n");
