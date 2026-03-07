@@ -2039,6 +2039,112 @@ public:
     return true;
   }
 
+  // Add a compound (layered) page:
+  //   BG = DDJVU_RENDER_BACKGROUND JPEG (low-res IW44 background).
+  //   FG = DDJVU_RENDER_FOREGROUND gray JPEG (Sjbz stencil coloured by FGbz).
+  // They are composited in the PDF with Multiply blend mode:
+  //   white FG (1.0) → background shows through unchanged.
+  //   black FG (0.0) → output is black (text).
+  //   gray  FG (k)   → background darkened by factor k (gray fills).
+  bool addCompoundPage(double mmW, double mmH,
+                       const QByteArray &bgData, int bgW, int bgH, bool bgIsGray,
+                       const QByteArray &fgData, int fgW, int fgH,
+                       const QVector<PdfWordZone> &words)
+  {
+    if (!file_.isOpen()) return false;
+    if (bgData.isEmpty() || fgData.isEmpty()) return false;
+
+    const double ptW = mmW / 25.4 * 72.0;
+    const double ptH = mmH / 25.4 * 72.0;
+
+    // Background image XObject.
+    const int bgObj = alloc();
+    beginObj(bgObj);
+    write(baf(
+      "<< /Type /XObject /Subtype /Image\n"
+      "   /Width %d /Height %d\n"
+      "   /ColorSpace %s /BitsPerComponent 8\n"
+      "   /Filter /DCTDecode /Length %d >>\n"
+      "stream\n",
+      bgW, bgH, bgIsGray ? "/DeviceGray" : "/DeviceRGB", (int)bgData.size()));
+    file_.write(bgData);
+    write("\nendstream\n");
+    endObj();
+
+    // Foreground image XObject (gray JPEG, composited with Multiply).
+    const int fgObj = alloc();
+    beginObj(fgObj);
+    write(baf(
+      "<< /Type /XObject /Subtype /Image\n"
+      "   /Width %d /Height %d\n"
+      "   /ColorSpace /DeviceGray /BitsPerComponent 8\n"
+      "   /Filter /DCTDecode /Length %d >>\n"
+      "stream\n",
+      fgW, fgH, (int)fgData.size()));
+    file_.write(fgData);
+    write("\nendstream\n");
+    endObj();
+
+    // ExtGState: Multiply blend mode for the foreground layer.
+    const int gsObj = alloc();
+    beginObj(gsObj);
+    write("<< /Type /ExtGState /BM /Multiply >>\n");
+    endObj();
+
+    // Content stream.
+    // Text coordinate scaling: DjVu pixels (at FG/native DPI) → PDF points.
+    const double sx = ptW / fgW;
+    const double sy = ptH / fgH;
+    QByteArray cs;
+    cs += baf("q\n%.4f 0 0 %.4f 0 0 cm\n/BG Do\nQ\n", ptW, ptH);
+    cs += baf("q\n/GSmul gs\n%.4f 0 0 %.4f 0 0 cm\n/FG Do\nQ\n", ptW, ptH);
+    if (!words.isEmpty()) {
+      cs += "BT\n3 Tr\n";
+      for (const PdfWordZone &w : words) {
+        if (w.text.isEmpty()) continue;
+        const double x1  = w.djvuRect.left()   * sx;
+        const double y1  = w.djvuRect.top()     * sy;
+        const double wPt = w.djvuRect.width()   * sx;
+        const double hPt = w.djvuRect.height()  * sy;
+        if (wPt <= 0.0 || hPt <= 0.0) continue;
+        const int    nch    = qMax(1, w.text.size());
+        const double scaleX = wPt / (0.5 * hPt * nch);
+        QByteArray encoded  = charset_.encodeString(w.text);
+        QByteArray hex;
+        hex.reserve(encoded.size() * 2);
+        for (unsigned char byte : encoded)
+          hex += baf("%02X", (unsigned)byte);
+        cs += baf(
+          "/F0 1 Tf\n%.4f 0 0 %.4f %.4f %.4f Tm\n<%s> Tj\n",
+          scaleX * hPt, hPt, x1, y1, hex.constData());
+      }
+      cs += "ET\n";
+    }
+
+    const int csObj = alloc();
+    beginObj(csObj);
+    write(baf("<< /Length %d >>\nstream\n", (int)cs.size()));
+    file_.write(cs);
+    write("\nendstream\n");
+    endObj();
+
+    // Page object.
+    const int pageObj = alloc();
+    beginObj(pageObj);
+    write(baf(
+      "<< /Type /Page /Parent 2 0 R\n"
+      "   /MediaBox [0 0 %.4f %.4f]\n"
+      "   /Contents %d 0 R\n"
+      "   /Resources << /XObject << /BG %d 0 R /FG %d 0 R >>\n"
+      "                 /ExtGState << /GSmul %d 0 R >>\n"
+      "                 /Font << /F0 3 0 R >> >> >>\n",
+      ptW, ptH, csObj, bgObj, fgObj, gsObj));
+    endObj();
+
+    pageObjs_.append(pageObj);
+    return true;
+  }
+
   // Flush cross-ref table and trailer. Returns false on I/O error.
   bool finalize() {
     if (!file_.isOpen()) return false;
@@ -2444,10 +2550,97 @@ QDjViewPdfTextExporter::doPage()
 
   // JBIG2 is only safe for BITONAL pages — those are guaranteed pure B&W.
   // COMPOUND pages may have FGbz multi-color foreground (e.g. gray fills +
-  // black text) and IW44 background; RENDER_BLACK would crush the colored
-  // stencil to solid black, losing gray fills.  Use gray JPEG for all
-  // non-BITONAL pages.
+  // black text) and IW44 background; use layered BG+FG PDF rendering instead.
   bool forceJbig2 = isBitonalEarly;
+
+  // For COMPOUND pages: render BG (IW44) and FG (Sjbz+FGbz stencil) as
+  // separate layers and composite them in the PDF with Multiply blend mode.
+  //   Multiply: white FG → BG unchanged; black FG → black; gray FG (k) → BG*k.
+  // This exactly replicates DjVu compositing for pages with FGbz colors.
+  const ddjvu_page_type_t earlyType = ddjvu_page_get_type(*page);
+  if (earlyType == DDJVU_PAGETYPE_COMPOUND && renderMode == DDJVU_RENDER_COLOR) {
+    const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
+
+    // Background layer: IW44 background rendered at reduced DPI (small file).
+    ddjvu_rect_t bgrect; bgrect.x = bgrect.y = 0;
+    bgrect.w = (unsigned)renderW; bgrect.h = (unsigned)renderH;
+    ddjvu_format_t *fmtBg = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+    ddjvu_format_set_row_order(fmtBg, 1);
+    ddjvu_format_set_gamma(fmtBg, 2.2);
+    QImage bgImg(renderW, renderH, QImage::Format_RGB888);
+    bgImg.fill(Qt::white);
+    ddjvu_page_render(*page, DDJVU_RENDER_BACKGROUND, &bgrect, &bgrect, fmtBg,
+                      bgImg.bytesPerLine(), reinterpret_cast<char *>(bgImg.bits()));
+    ddjvu_format_release(fmtBg);
+
+    // Check whether the BG is grayscale or color.
+    bool bgIsGray = false;
+    {
+      const uchar *bits = bgImg.constBits();
+      const int total = bgImg.width() * bgImg.height();
+      const int step = qMax(1, total / 1000);
+      bool hasColor = false;
+      for (int px = 0; px < total && !hasColor; px += step) {
+        const uchar *p = bits + px * 3;
+        int diff = qMax(qAbs((int)p[0]-(int)p[1]),
+                         qMax(qAbs((int)p[1]-(int)p[2]),
+                              qAbs((int)p[0]-(int)p[2])));
+        if (diff > 16) hasColor = true;
+      }
+      bgIsGray = !hasColor;
+    }
+    QByteArray bgData;
+    if (bgIsGray) {
+      bgData = encodeJpegGray(bgImg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
+    } else {
+      QBuffer bb(&bgData); bb.open(QIODevice::WriteOnly);
+      QImageWriter bw(&bb, "JPEG"); bw.setQuality(jpegQ);
+      bw.write(bgImg);
+    }
+
+    // Foreground layer: Sjbz stencil colored by FGbz, at native DPI.
+    ddjvu_rect_t fgrect; fgrect.x = fgrect.y = 0;
+    fgrect.w = (unsigned)srcW; fgrect.h = (unsigned)srcH;
+    ddjvu_format_t *fmtFg = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+    ddjvu_format_set_row_order(fmtFg, 1);
+    ddjvu_format_set_gamma(fmtFg, 2.2);
+    QImage fgImg(srcW, srcH, QImage::Format_RGB888);
+    fgImg.fill(Qt::white);
+    ddjvu_page_render(*page, DDJVU_RENDER_FOREGROUND, &fgrect, &fgrect, fmtFg,
+                      fgImg.bytesPerLine(), reinterpret_cast<char *>(fgImg.bits()));
+    ddjvu_format_release(fmtFg);
+    QByteArray fgData = encodeJpegGray(
+      fgImg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
+
+    // Collect text words (coordinate scaling uses FG/native DPI dimensions).
+    QVector<PdfWordZone> words;
+    if (ui.textLayerCheckBox->isChecked() && document) {
+      miniexp_t textExpr = document->getPageText(pageno);
+      if (textExpr != miniexp_dummy && textExpr != miniexp_nil)
+        pdfCollectWords(textExpr, words);
+    }
+
+    if (logFile_.isOpen()) {
+      logFile_.write("page=" + QByteArray::number(pageno + 1)
+        + " srcW=" + QByteArray::number(srcW)
+        + " srcH=" + QByteArray::number(srcH)
+        + " imgdpi=" + QByteArray::number(imgdpi)
+        + " renderW=" + QByteArray::number(renderW)
+        + " renderH=" + QByteArray::number(renderH)
+        + " type=3 gray=1 bitonal=0 jbig2=0 renderOk=1 [COMPOUND_BG+FG]\n"
+        + "  bgSize=" + QByteArray::number(bgData.size())
+        + " fgSize=" + QByteArray::number(fgData.size()) + "\n");
+      logFile_.flush();
+    }
+
+    const bool addOk = rawPdf->addCompoundPage(
+      mmW, mmH, bgData, renderW, renderH, bgIsGray, fgData, srcW, srcH, words);
+    if (logFile_.isOpen())
+      logFile_.write("  addPage=" + QByteArray(addOk ? "OK" : "FAILED") + "\n");
+    if (!addOk)
+      error(tr("Failed to write PDF page %1.").arg(pageno + 1), __FILE__, __LINE__);
+    return;
+  }
 
   if (useGray) {
     QImage gray = qimg.convertToFormat(QImage::Format_Grayscale8);
