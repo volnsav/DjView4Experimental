@@ -2109,13 +2109,15 @@ public:
   // Add a compound (layered) page using three layers:
   //   BG   = RENDER_BACKGROUND JPEG (IW44 layer — photo, paper texture)
   //   mask = RENDER_BLACK JBIG2 stencil at native DPI
-  //   FG   = RENDER_FOREGROUND JPEG at renderDpi, clipped by /Mask <maskObj>
+  //   FG   = RENDER_FOREGROUND JPEG at native DPI (low-Q), clipped by /Mask
   //
   // The mask XObject uses /ImageMask true (required by PDF spec: explicit
   // /Mask image reference must be an image mask). With default /Decode [0 1]:
   // sample 1 = ink = opaque (paint FG pixel); sample 0 = paper = transparent
   // (BG shows through). Our JBIG2: 1=black(ink), 0=white(paper) — matches.
-  // FG is rendered at renderDpi — the mask provides sharp native-DPI edges.
+  // FG is rendered at native DPI (srcW×srcH) so the Sjbz stencil maps 1:1
+  // to pixels — text is solid black, not anti-aliased gray. Low JPEG quality
+  // keeps size small; mask handles sharp edges, FG only carries flat colors.
   bool addCompoundPage(double mmW, double mmH,
                        const QByteArray &bgData,   int bgW,   int bgH,   bool bgIsGray,
                        const QByteArray &fgData,   int fgW,   int fgH,   bool fgIsGray,
@@ -2676,17 +2678,22 @@ QDjViewPdfTextExporter::doPage()
         }
       }
     }
-    // 2. FG: RENDER_FOREGROUND at renderDpi (FGbz fills + stencil color)
-    // FG carries color/gray values only; the mask clips at native DPI for
-    // sharp edges. Rendering at renderDpi keeps JPEG small.
+    // 2. FG: RENDER_FOREGROUND at native DPI (srcW×srcH)
+    // Must render at native DPI so the Sjbz stencil maps 1:1 to pixels —
+    // text pixels are fully black, not anti-aliased gray. Using low JPEG
+    // quality (Q=15) keeps the size small: the mask handles sharp edges,
+    // and FG only carries flat color values (black text, gray fills on
+    // white background). JPEG artefacts in paper areas are invisible
+    // because those areas are masked out (transparent).
+    const int fgJpegQ = qMin(jpegQ, 15);
     QByteArray fgData;
     bool fgIsGray = false;
     {
       ddjvu_rect_t frect; frect.x = frect.y = 0;
-      frect.w = (unsigned)renderW; frect.h = (unsigned)renderH;
+      frect.w = (unsigned)srcW; frect.h = (unsigned)srcH;
       ddjvu_format_t *fmtFg = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
       ddjvu_format_set_row_order(fmtFg, 1);
-      QImage fgImg(renderW, renderH, QImage::Format_RGB888);
+      QImage fgImg(srcW, srcH, QImage::Format_RGB888);
       fgImg.fill(Qt::white);
       const bool fgOk = ddjvu_page_render(*page, DDJVU_RENDER_FOREGROUND,
                            &frect, &frect, fmtFg,
@@ -2696,7 +2703,7 @@ QDjViewPdfTextExporter::doPage()
       if (fgOk) {
         // Chroma check to choose gray vs RGB JPEG for FG.
         const uchar *bits = fgImg.constBits();
-        const int total = renderW * renderH;
+        const int total = srcW * srcH;
         const int step = qMax(1, total / 2000);
         bool hasColor = false;
         for (int px = 0; px < total && !hasColor; px += step) {
@@ -2708,10 +2715,10 @@ QDjViewPdfTextExporter::doPage()
         }
         fgIsGray = !hasColor;
         if (fgIsGray) {
-          fgData = encodeJpegGray(fgImg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
+          fgData = encodeJpegGray(fgImg.convertToFormat(QImage::Format_Grayscale8), fgJpegQ);
         } else {
           QBuffer buf(&fgData); buf.open(QIODevice::WriteOnly);
-          QImageWriter writer(&buf, "JPEG"); writer.setQuality(jpegQ);
+          QImageWriter writer(&buf, "JPEG"); writer.setQuality(fgJpegQ);
           writer.write(fgImg);
         }
       }
@@ -2741,7 +2748,7 @@ QDjViewPdfTextExporter::doPage()
       const bool addOk = rawPdf->addCompoundPage(
         mmW, mmH,
         bgData,   renderW, renderH, bgIsGray,
-        fgData,   renderW, renderH, fgIsGray,
+        fgData,   srcW,    srcH,    fgIsGray,
         maskData, srcW,    srcH,
         words);
       if (!addOk)
