@@ -1925,13 +1925,15 @@ public:
     writeFont();   // obj 3
 
     // Pages object (obj 2).
+    // NOTE: do NOT use baf() here — Kids array can exceed the 1024-byte limit.
     beginObj(2);
     QByteArray kids = "[";
     for (int p : pageObjs_) kids += QByteArray::number(p) + " 0 R ";
     kids += "]";
-    write(baf(
-      "<< /Type /Pages /Kids %s /Count %d >>\n",
-      kids.constData(), (int)pageObjs_.size()));
+    QByteArray pagesDict = "<< /Type /Pages /Kids " + kids
+                         + " /Count " + QByteArray::number((int)pageObjs_.size())
+                         + " >>\n";
+    write(pagesDict);
     endObj();
 
     // Catalog (obj 1).
