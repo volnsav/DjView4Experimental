@@ -2615,59 +2615,10 @@ QDjViewPdfTextExporter::doPage()
     useGray = !hasColor;
   }
 
-  // JBIG2 is only safe for BITONAL pages — those are guaranteed pure B&W.
-  // COMPOUND pages may have FGbz multi-color foreground (e.g. gray fills +
-  // black text) and IW44 background; use layered BG+FG PDF rendering instead.
+  // JBIG2 is only safe for BITONAL pages — pure B&W guaranteed.
+  // COMPOUND pages may have an IW44 photo background and/or FGbz gray fills;
+  // forcing RENDER_BLACK would erase both. Let them fall through to JPEG.
   bool forceJbig2 = isBitonalEarly;
-
-  // For COMPOUND pages: re-render with RENDER_BLACK at native DPI to get
-  // the pure Sjbz stencil. No downsampling → no anti-aliasing → clean
-  // threshold for JBIG2, same quality as BITONAL pages.
-  // Note: FGbz gray colors are lost (fills become black). Acceptable trade-off
-  // for now — small file, artifact-free text.
-  const ddjvu_page_type_t earlyType = ddjvu_page_get_type(*page);
-  if (earlyType == DDJVU_PAGETYPE_COMPOUND && renderMode == DDJVU_RENDER_COLOR) {
-    // Use 1bpp direct render — no RGB24 intermediate, no threshold needed.
-    QByteArray jbig2Data = encodeJbig2BlackRender(*page, srcW, srcH);
-    {
-      const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
-      if (jbig2Data.isEmpty()) {
-        // fallback: gray JPEG at renderDpi
-        jbig2Data = encodeJpegGray(
-          qimg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
-      }
-      QVector<PdfWordZone> words;
-      if (ui.textLayerCheckBox->isChecked() && document) {
-        miniexp_t textExpr = document->getPageText(pageno);
-        if (textExpr != miniexp_dummy && textExpr != miniexp_nil)
-          pdfCollectWords(textExpr, words);
-      }
-      const bool isJbig2out = !jbig2Data.isEmpty()
-                           && ((unsigned char)jbig2Data[0] != 0xFF);
-      if (logFile_.isOpen()) {
-        logFile_.write("page=" + QByteArray::number(pageno + 1)
-          + " srcW=" + QByteArray::number(srcW)
-          + " srcH=" + QByteArray::number(srcH)
-          + " imgdpi=" + QByteArray::number(imgdpi)
-          + " renderW=" + QByteArray::number(renderW)
-          + " renderH=" + QByteArray::number(renderH)
-          + " type=3 gray=1 bitonal=0"
-          + " jbig2=" + QByteArray(isJbig2out ? "1" : "0")
-          + " renderOk=1 [COMPOUND_BLACK]\n"
-          + (isJbig2out ? "  jbig2Size=" : "  jpegSize=")
-          + QByteArray::number(jbig2Data.size()) + "\n");
-        logFile_.flush();
-      }
-      const bool addOk = rawPdf->addPage(
-        mmW, mmH, jbig2Data, srcW, srcH, true, isJbig2out, words);
-      if (logFile_.isOpen())
-        logFile_.write("  addPage=" + QByteArray(addOk ? "OK" : "FAILED") + "\n");
-      if (!addOk)
-        error(tr("Failed to write PDF page %1.").arg(pageno + 1), __FILE__, __LINE__);
-      return;
-    }
-    // RENDER_BLACK failed — fall through to normal path
-  }
 
   if (useGray) {
     QImage gray = qimg.convertToFormat(QImage::Format_Grayscale8);
