@@ -129,6 +129,17 @@ target_link_libraries(djview PRIVATE
     Qt${QT_VERSION_MAJOR}::PrintSupport
 )
 
+# OpenGL acceleration (optional – renderer falls back to Raster if not found)
+find_package(Qt${QT_VERSION_MAJOR} QUIET COMPONENTS OpenGL OpenGLWidgets)
+if(Qt${QT_VERSION_MAJOR}OpenGLWidgets_FOUND)
+    target_link_libraries(djview PRIVATE
+        Qt${QT_VERSION_MAJOR}::OpenGL
+        Qt${QT_VERSION_MAJOR}::OpenGLWidgets
+    )
+elseif(Qt${QT_VERSION_MAJOR}OpenGL_FOUND)
+    target_link_libraries(djview PRIVATE Qt${QT_VERSION_MAJOR}::OpenGL)
+endif()
+
 # ---------------------------------------------------------------------------
 # DjVuLibre
 # ---------------------------------------------------------------------------
