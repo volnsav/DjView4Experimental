@@ -170,6 +170,65 @@ endif()
 target_include_directories(djview PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 # ---------------------------------------------------------------------------
+# Post-build deployment (Windows only)
+# Runs automatically after every build so the output dir is self-contained.
+# ---------------------------------------------------------------------------
+if(WIN32)
+    # Disable vcpkg MSBuild applocal.ps1 – we handle all DLL deployment
+    # ourselves via TARGET_RUNTIME_DLLS + RunWinDeployQt.cmake below.
+    # Without this, applocal.ps1 fails on libdjvulibre.dll (not in vcpkg)
+    # and aborts the build before our own POST_BUILD steps run.
+    set_property(TARGET djview PROPERTY VS_GLOBAL_VcpkgApplocalDeps "false")
+
+    # 1. Copy all transitive runtime DLLs (libdjvulibre, vcpkg Qt DLLs, etc.)
+    #    $<TARGET_RUNTIME_DLLS:djview> requires CMake >= 3.21 (our minimum).
+    add_custom_command(TARGET djview POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:djview>
+            $<TARGET_FILE_DIR:djview>
+        COMMAND_EXPAND_LISTS
+        COMMENT "Copying runtime DLLs -> $<TARGET_FILE_DIR:djview>"
+    )
+
+    # 2. windeployqt – adds platforms/, imageformats/, styles/, etc.
+    #    Invoked via a cmake -P script so that windeployqt's non-zero exit code
+    #    for non-fatal warnings (e.g. missing translations catalog in vcpkg Qt)
+    #    does NOT abort the build.
+    if(WINDEPLOYQT_EXECUTABLE)
+        # Derive the vcpkg Qt6/plugins directory from windeployqt location.
+        # windeployqt lives at:  <vcpkg>/tools/Qt6/bin/windeployqt.exe
+        # plugins live at:       <vcpkg>/Qt6/plugins/
+        get_filename_component(_vcpkg_root "${WINDEPLOYQT_EXECUTABLE}" DIRECTORY) # tools/Qt6/bin
+        get_filename_component(_vcpkg_root "${_vcpkg_root}/../../.." ABSOLUTE)    # vcpkg triplet root
+        set(_qt_plugins "${_vcpkg_root}/Qt6/plugins")
+
+        # Copy only the plugin subdirs that djview actually needs.
+        # vcpkg ships only release-config plugins (no 'd' suffix) – they work
+        # for both Debug and Release builds of our own code.
+        foreach(_plugin_subdir
+            platforms      # mandatory: qwindows.dll
+            imageformats   # JPEG, PNG, GIF support
+            styles         # QModernWindowsStyle
+            tls            # HTTPS / network TLS
+            networkinformation
+        )
+            if(IS_DIRECTORY "${_qt_plugins}/${_plugin_subdir}")
+                add_custom_command(TARGET djview POST_BUILD
+                    COMMAND "${CMAKE_COMMAND}" -E copy_directory
+                        "${_qt_plugins}/${_plugin_subdir}"
+                        "$<TARGET_FILE_DIR:djview>/${_plugin_subdir}"
+                    COMMENT "Deploying Qt plugin: ${_plugin_subdir}"
+                )
+            endif()
+        endforeach()
+        unset(_vcpkg_root)
+        unset(_qt_plugins)
+    else()
+        message(WARNING "windeployqt not found – Qt plugins will NOT be deployed to the build dir")
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------
 include(GNUInstallDirs)
