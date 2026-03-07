@@ -156,6 +156,12 @@ elseif(TARGET djvulibre)
 endif()
 
 # ---------------------------------------------------------------------------
+# libjpeg-turbo (direct grayscale JPEG encoding bypassing Qt plugin)
+# ---------------------------------------------------------------------------
+find_package(JPEG REQUIRED)
+target_link_libraries(djview PRIVATE JPEG::JPEG)
+
+# ---------------------------------------------------------------------------
 # Compile definitions
 # ---------------------------------------------------------------------------
 target_compile_definitions(djview PRIVATE

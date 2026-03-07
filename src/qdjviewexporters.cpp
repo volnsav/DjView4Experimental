@@ -69,6 +69,8 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QImageWriter>
+#include <jpeglib.h>
+#include <setjmp.h>
 #include <QList>
 #include <QMap>
 #include <QMessageBox>
@@ -1749,6 +1751,52 @@ pdfCollectWords(miniexp_t p, QVector<PdfWordZone> &words)
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Direct libjpeg grayscale encoder.
+// Qt's JPEG plugin may convert Format_Grayscale8 → RGB before encoding;
+// calling libjpeg directly guarantees 1-channel (Y-only) output which is
+// typically 3× smaller than an equivalent RGB JPEG for B&W scanned pages.
+// ---------------------------------------------------------------------------
+struct JpegGrayErrorMgr { jpeg_error_mgr pub; jmp_buf jmpBuf; };
+static void jpegGrayErrorExit(j_common_ptr cinfo)
+{
+  longjmp(reinterpret_cast<JpegGrayErrorMgr *>(cinfo->err)->jmpBuf, 1);
+}
+static QByteArray encodeJpegGray(const QImage &img, int quality)
+{
+  Q_ASSERT(img.format() == QImage::Format_Grayscale8);
+  jpeg_compress_struct cinfo;
+  JpegGrayErrorMgr     jerr;
+  cinfo.err           = jpeg_std_error(&jerr.pub);
+  jerr.pub.error_exit = jpegGrayErrorExit;
+  unsigned char *outbuf  = nullptr;
+  unsigned long  outsize = 0;
+  if (setjmp(jerr.jmpBuf)) {
+    jpeg_destroy_compress(&cinfo);
+    if (outbuf) free(outbuf);
+    return QByteArray();
+  }
+  jpeg_create_compress(&cinfo);
+  jpeg_mem_dest(&cinfo, &outbuf, &outsize);
+  cinfo.image_width      = (JDIMENSION)img.width();
+  cinfo.image_height     = (JDIMENSION)img.height();
+  cinfo.input_components = 1;
+  cinfo.in_color_space   = JCS_GRAYSCALE;
+  jpeg_set_defaults(&cinfo);
+  jpeg_set_quality(&cinfo, qBound(1, quality, 100), TRUE);
+  jpeg_start_compress(&cinfo, TRUE);
+  while (cinfo.next_scanline < cinfo.image_height) {
+    JSAMPROW row = const_cast<JSAMPLE *>(
+        reinterpret_cast<const JSAMPLE *>(img.constScanLine(cinfo.next_scanline)));
+    jpeg_write_scanlines(&cinfo, &row, 1);
+  }
+  jpeg_finish_compress(&cinfo);
+  jpeg_destroy_compress(&cinfo);
+  QByteArray result(reinterpret_cast<char *>(outbuf), (int)outsize);
+  free(outbuf);
+  return result;
+}
+
 // RawPdfCharset – maps Unicode codepoints to single-byte codes for a
 // Type3 font's custom encoding (up to 254 distinct codepoints).
 
@@ -2330,32 +2378,46 @@ QDjViewPdfTextExporter::doPage()
       pdfCollectWords(textExpr, words);
   }
 
-  // Compress to JPEG using QImageWriter (gives proper error strings).
-  // qimg is Format_RGB888 which libjpeg/Qt handles cleanly.
+  // Compress to JPEG.
+  // For grayscale images (bitonal/B&W compound pages) use libjpeg directly
+  // to guarantee 1-channel encoding — Qt's JPEG plugin up-converts Grayscale8
+  // to RGB, losing all size benefit.
+  const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
+  const bool isGrayImg = (qimg.format() == QImage::Format_Grayscale8);
   QByteArray jpeg;
-  {
+  if (isGrayImg) {
+    jpeg = encodeJpegGray(qimg, jpegQ);
+    if (jpeg.isEmpty()) {
+      // libjpeg failed — fall back to RGB QImageWriter
+      if (logFile_.isOpen()) logFile_.write("  encodeJpegGray FAILED, fallback RGB\n");
+      QImage rgb = qimg.convertToFormat(QImage::Format_RGB888);
+      QBuffer b(&jpeg); b.open(QIODevice::WriteOnly);
+      QImageWriter w(&b, "JPEG"); w.setQuality(jpegQ); w.write(rgb);
+    }
+  } else {
     QBuffer buf(&jpeg);
     buf.open(QIODevice::WriteOnly);
     QImageWriter writer(&buf, "JPEG");
-    writer.setQuality(qBound(1, ui.jpegQualitySpinBox->value(), 100));
+    writer.setQuality(jpegQ);
     if (!writer.write(qimg)) {
       if (logFile_.isOpen())
         logFile_.write("  JPEG encode FAILED: " + writer.errorString().toUtf8() + "\n");
-      // JPEG encode failed: substitute a white page and continue export.
       qWarning("DjView PDF export: page %d JPEG encode failed: %s",
                pageno + 1, qPrintable(writer.errorString()));
       jpeg.clear();
-      QBuffer buf2(&jpeg); buf2.open(QIODevice::WriteOnly);
-      QImage white(renderW, renderH, qimg.format());
-      white.fill(Qt::white);
-      QImageWriter w2(&buf2, "JPEG"); w2.setQuality(75);
-      if (!w2.write(white)) {
-        if (logFile_.isOpen())
-          logFile_.write("  fallback white JPEG FAILED: " + w2.errorString().toUtf8() + "\n");
-        error(tr("Failed to write PDF page %1: JPEG plugin unavailable.")
-              .arg(pageno + 1), __FILE__, __LINE__);
-        return;
-      }
+    }
+  }
+  if (jpeg.isEmpty()) {
+    // Last resort: white page in RGB
+    QImage white(renderW, renderH, QImage::Format_RGB888);
+    white.fill(Qt::white);
+    QBuffer b2(&jpeg); b2.open(QIODevice::WriteOnly);
+    QImageWriter w2(&b2, "JPEG"); w2.setQuality(75);
+    if (!w2.write(white)) {
+      if (logFile_.isOpen()) logFile_.write("  fallback white RGB JPEG FAILED\n");
+      error(tr("Failed to write PDF page %1: JPEG plugin unavailable.").arg(pageno + 1),
+            __FILE__, __LINE__);
+      return;
     }
   }
 
@@ -2363,8 +2425,7 @@ QDjViewPdfTextExporter::doPage()
     logFile_.write("  jpegSize=" + QByteArray::number(jpeg.size()) + "\n");
 
   const bool addOk = rawPdf->addPage(mmW, mmH, jpeg, renderW, renderH,
-                                      qimg.format() == QImage::Format_Grayscale8,
-                                      words);
+                                      isGrayImg, words);
   if (logFile_.isOpen())
     logFile_.write("  addPage=" + QByteArray(addOk ? "OK" : "FAILED") + "\n");
   if (!addOk)
