@@ -1831,6 +1831,7 @@ public:
   // Add one page. jpeg must be a valid JPEG byte stream (header FF D8).
   bool addPage(double mmW, double mmH,
                const QByteArray &jpeg, int imgW, int imgH,
+               bool isGray,
                const QVector<PdfWordZone> &words)
   {
     if (!file_.isOpen()) return false;
@@ -1848,10 +1849,12 @@ public:
     write(baf(
       "<< /Type /XObject /Subtype /Image\n"
       "   /Width %d /Height %d\n"
-      "   /ColorSpace /DeviceRGB /BitsPerComponent 8\n"
+      "   /ColorSpace %s /BitsPerComponent 8\n"
       "   /Filter /DCTDecode /Length %d >>\n"
       "stream\n",
-      imgW, imgH, (int)jpeg.size()));
+      imgW, imgH,
+      isGray ? "/DeviceGray" : "/DeviceRGB",
+      (int)jpeg.size()));
     file_.write(jpeg);
     write("\nendstream\n");
     endObj();
@@ -2273,6 +2276,18 @@ QDjViewPdfTextExporter::doPage()
   ddjvu_format_release(fmt);
   if (!renderOk) qimg.fill(Qt::white);
 
+  // NOW type is known (decode completed during render).
+  // Convert bitonal/stencil pages to grayscale — JPEG with 1 channel
+  // is ~3x smaller than RGB for B&W scanned pages.
+  const bool useGray =
+      (ddjvu_page_get_type(*page) == DDJVU_PAGETYPE_BITONAL)
+      || (renderMode == DDJVU_RENDER_BLACK);
+  if (useGray) {
+    QImage gray = qimg.convertToFormat(QImage::Format_Grayscale8);
+    if (!gray.isNull()) qimg = std::move(gray);
+    // if conversion failed (shouldn't happen), keep RGB — still works
+  }
+
   const int pageType = (int)ddjvu_page_get_type(*page);
   if (logFile_.isOpen()) {
     QByteArray line = "page=" + QByteArray::number(pageno + 1)
@@ -2282,6 +2297,7 @@ QDjViewPdfTextExporter::doPage()
       + " renderW=" + QByteArray::number(renderW)
       + " renderH=" + QByteArray::number(renderH)
       + " type=" + QByteArray::number(pageType)
+      + " gray=" + QByteArray(useGray ? "1" : "0")
       + " renderOk=" + (renderOk ? "1" : "0")
       + "\n";
     logFile_.write(line);
@@ -2312,7 +2328,7 @@ QDjViewPdfTextExporter::doPage()
                pageno + 1, qPrintable(writer.errorString()));
       jpeg.clear();
       QBuffer buf2(&jpeg); buf2.open(QIODevice::WriteOnly);
-      QImage white(renderW, renderH, QImage::Format_RGB888);
+      QImage white(renderW, renderH, qimg.format());
       white.fill(Qt::white);
       QImageWriter w2(&buf2, "JPEG"); w2.setQuality(75);
       if (!w2.write(white)) {
@@ -2328,7 +2344,9 @@ QDjViewPdfTextExporter::doPage()
   if (logFile_.isOpen())
     logFile_.write("  jpegSize=" + QByteArray::number(jpeg.size()) + "\n");
 
-  const bool addOk = rawPdf->addPage(mmW, mmH, jpeg, renderW, renderH, words);
+  const bool addOk = rawPdf->addPage(mmW, mmH, jpeg, renderW, renderH,
+                                      qimg.format() == QImage::Format_Grayscale8,
+                                      words);
   if (logFile_.isOpen())
     logFile_.write("  addPage=" + QByteArray(addOk ? "OK" : "FAILED") + "\n");
   if (!addOk)
