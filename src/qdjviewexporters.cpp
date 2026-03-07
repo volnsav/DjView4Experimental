@@ -2115,7 +2115,7 @@ public:
   // /Mask image reference must be an image mask). With default /Decode [0 1]:
   // sample 1 = ink = opaque (paint FG pixel); sample 0 = paper = transparent
   // (BG shows through). Our JBIG2: 1=black(ink), 0=white(paper) — matches.
-  // FG is rendered at native DPI (srcW×srcH) for pixel-perfect text edges.
+  // FG is rendered at renderDpi — the mask provides sharp native-DPI edges.
   bool addCompoundPage(double mmW, double mmH,
                        const QByteArray &bgData,   int bgW,   int bgH,   bool bgIsGray,
                        const QByteArray &fgData,   int fgW,   int fgH,   bool fgIsGray,
@@ -2676,17 +2676,17 @@ QDjViewPdfTextExporter::doPage()
         }
       }
     }
-    // 2. FG: RENDER_FOREGROUND at native DPI (FGbz fills + stencil text)
-    // At native DPI the Sjbz stencil maps 1:1 to pixels — no anti-aliasing,
-    // so text edges are pixel-perfect (matching the JBIG2 mask exactly).
+    // 2. FG: RENDER_FOREGROUND at renderDpi (FGbz fills + stencil color)
+    // FG carries color/gray values only; the mask clips at native DPI for
+    // sharp edges. Rendering at renderDpi keeps JPEG small.
     QByteArray fgData;
     bool fgIsGray = false;
     {
       ddjvu_rect_t frect; frect.x = frect.y = 0;
-      frect.w = (unsigned)srcW; frect.h = (unsigned)srcH;
+      frect.w = (unsigned)renderW; frect.h = (unsigned)renderH;
       ddjvu_format_t *fmtFg = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
       ddjvu_format_set_row_order(fmtFg, 1);
-      QImage fgImg(srcW, srcH, QImage::Format_RGB888);
+      QImage fgImg(renderW, renderH, QImage::Format_RGB888);
       fgImg.fill(Qt::white);
       const bool fgOk = ddjvu_page_render(*page, DDJVU_RENDER_FOREGROUND,
                            &frect, &frect, fmtFg,
@@ -2696,7 +2696,7 @@ QDjViewPdfTextExporter::doPage()
       if (fgOk) {
         // Chroma check to choose gray vs RGB JPEG for FG.
         const uchar *bits = fgImg.constBits();
-        const int total = srcW * srcH;
+        const int total = renderW * renderH;
         const int step = qMax(1, total / 2000);
         bool hasColor = false;
         for (int px = 0; px < total && !hasColor; px += step) {
@@ -2741,7 +2741,7 @@ QDjViewPdfTextExporter::doPage()
       const bool addOk = rawPdf->addCompoundPage(
         mmW, mmH,
         bgData,   renderW, renderH, bgIsGray,
-        fgData,   srcW,    srcH,    fgIsGray,
+        fgData,   renderW, renderH, fgIsGray,
         maskData, srcW,    srcH,
         words);
       if (!addOk)
