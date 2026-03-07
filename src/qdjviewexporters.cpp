@@ -58,6 +58,7 @@
 #endif
 
 #include <QApplication>
+#include <QBuffer>
 #include <QCheckBox>
 #include <QDebug>
 #include <QDir>
@@ -1971,14 +1972,33 @@ QDjViewPdfTextExporter::doPage()
     memset(imgBuf.data(), 0xff, imgBuf.size());  // white fallback
   ddjvu_format_release(fmt);
 
-  // Convert to QImage (copies data so imgBuf can be freed).
+  // Build QImage from the rendered RGB24 buffer.
   QImage qimg(
     reinterpret_cast<const uchar *>(imgBuf.constData()),
     renderW, renderH, rowBytes, QImage::Format_RGB888);
-  qimg = qimg.copy();
+
+  // CRITICAL: QPdfEngine checks image.hasAlphaChannel() to choose DCT vs FlateDecode.
+  //   Format_RGB888 → Qt internally converts to ARGB32_Premultiplied (adds alpha field)
+  //                 → QPdfEngine sees alpha → uses FlateDecode (zlib) → 5-8× larger file
+  //   Format_RGB32  → no alpha channel → QPdfEngine uses DCT (JPEG) → compact PDF
+  //
+  // We also honour the JPEG quality spinbox here: compress to JPEG at the
+  // requested quality then reload as Format_RGB32 (which QPdfEngine will embed
+  // as another JPEG pass at its default quality ~75).  For typical quality
+  // values the double-pass artefacts are imperceptible, and the size/quality
+  // tradeoff is meaningful especially at lower settings.
+  const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
+  {
+    QByteArray jpegBuf;
+    QBuffer    buf(&jpegBuf);
+    buf.open(QIODevice::WriteOnly);
+    qimg.save(&buf, "JPEG", jpegQ);   // apply user quality; also detaches from imgBuf
+    qimg = QImage::fromData(jpegBuf, "JPEG");  // decoded as Format_RGB32, hasAlphaChannel()==false
+  }
 
   // ---- 1. Draw the raster image, scaled to fill the physical page --------
   // QPainter scales qimg from renderW×renderH to pageW×pageH automatically.
+  // QPdfEngine will embed it via DCT (JPEG) because qimg.hasAlphaChannel()==false.
   painter->drawImage(QRect(0, 0, pageW, pageH), qimg);
 
   // ---- 2. Invisible text overlay (searchable PDF) -----------------------
