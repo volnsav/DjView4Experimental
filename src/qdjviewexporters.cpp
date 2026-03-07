@@ -2615,10 +2615,41 @@ QDjViewPdfTextExporter::doPage()
     useGray = !hasColor;
   }
 
-  // JBIG2 is only safe for BITONAL pages — pure B&W guaranteed.
-  // COMPOUND pages may have an IW44 photo background and/or FGbz gray fills;
-  // forcing RENDER_BLACK would erase both. Let them fall through to JPEG.
+  // COMPOUND pages that passed the chroma check (useGray=true) have no
+  // significant color background — treat them as text-only and encode with
+  // JBIG2 at native DPI for sharp, small output.
+  // COMPOUND pages with color (photo/IW44 background) fall through to JPEG.
   bool forceJbig2 = isBitonalEarly;
+  const ddjvu_page_type_t earlyType = ddjvu_page_get_type(*page);
+  if (earlyType == DDJVU_PAGETYPE_COMPOUND && useGray
+      && renderMode == DDJVU_RENDER_COLOR) {
+    QByteArray jbig2Data = encodeJbig2BlackRender(*page, srcW, srcH);
+    const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
+    if (jbig2Data.isEmpty())
+      jbig2Data = encodeJpegGray(qimg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
+    QVector<PdfWordZone> words;
+    if (ui.textLayerCheckBox->isChecked() && document) {
+      miniexp_t textExpr = document->getPageText(pageno);
+      if (textExpr != miniexp_dummy && textExpr != miniexp_nil)
+        pdfCollectWords(textExpr, words);
+    }
+    const bool isJbig2out = !jbig2Data.isEmpty()
+                         && ((unsigned char)jbig2Data[0] != 0xFF);
+    if (logFile_.isOpen()) {
+      logFile_.write("page=" + QByteArray::number(pageno + 1)
+        + " srcW=" + QByteArray::number(srcW)
+        + " srcH=" + QByteArray::number(srcH)
+        + " type=3 gray=1 [COMPOUND_JBIG2]\n"
+        + (isJbig2out ? "  jbig2Size=" : "  jpegSize=")
+        + QByteArray::number(jbig2Data.size()) + "\n");
+      logFile_.flush();
+    }
+    const bool addOk = rawPdf->addPage(mmW, mmH, jbig2Data, srcW, srcH,
+                                        true, isJbig2out, words);
+    if (!addOk)
+      error(tr("Failed to write PDF page %1.").arg(pageno + 1), __FILE__, __LINE__);
+    return;
+  }
 
   if (useGray) {
     QImage gray = qimg.convertToFormat(QImage::Format_Grayscale8);
