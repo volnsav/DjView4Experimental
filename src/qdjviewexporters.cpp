@@ -2442,29 +2442,12 @@ QDjViewPdfTextExporter::doPage()
     useGray = !hasColor;
   }
 
-  // For compound B&W pages rendered in COLOR mode: re-render with
-  // RENDER_BLACK at native DPI to get the pure JB2 stencil layer.
-  // RENDER_BLACK has no anti-aliasing → safe for JBIG2 threshold.
-  // Only for COMPOUND type — PHOTO pages have actual halftone/grayscale
-  // content that RENDER_BLACK would crush to solid black.
-  bool forceJbig2 = isBitonalEarly;   // BITONAL already handled above
-  const ddjvu_page_type_t earlyType = ddjvu_page_get_type(*page);
-  if (useGray && !isBitonalEarly && renderMode == DDJVU_RENDER_COLOR
-      && earlyType == DDJVU_PAGETYPE_COMPOUND) {
-    ddjvu_rect_t brect; brect.x = brect.y = 0;
-    brect.w = (unsigned)srcW;
-    brect.h = (unsigned)srcH;
-    ddjvu_format_t *fmtB = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
-    ddjvu_format_set_row_order(fmtB, 1);
-    QImage bimg(srcW, srcH, QImage::Format_RGB888);
-    bimg.fill(Qt::white);
-    if (ddjvu_page_render(*page, DDJVU_RENDER_BLACK, &brect, &brect, fmtB,
-                          bimg.bytesPerLine(), reinterpret_cast<char *>(bimg.bits()))) {
-      qimg = std::move(bimg);
-      forceJbig2 = true;
-    }
-    ddjvu_format_release(fmtB);
-  }
+  // JBIG2 is only safe for BITONAL pages — those are guaranteed pure B&W.
+  // COMPOUND pages may have FGbz multi-color foreground (e.g. gray fills +
+  // black text) and IW44 background; RENDER_BLACK would crush the colored
+  // stencil to solid black, losing gray fills.  Use gray JPEG for all
+  // non-BITONAL pages.
+  bool forceJbig2 = isBitonalEarly;
 
   if (useGray) {
     QImage gray = qimg.convertToFormat(QImage::Format_Grayscale8);
