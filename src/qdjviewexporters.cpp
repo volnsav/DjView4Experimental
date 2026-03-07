@@ -1827,6 +1827,54 @@ static PIX *qImageToPix1bpp(const QImage &gray)
   return pix;
 }
 
+// Render a DjVu page using RENDER_BLACK at the given rect size directly into
+// a Leptonica PIX* 1bpp — no RGB24 intermediate, no threshold needed.
+// ddjvu MSBTOLSB format: each row is ceil(w/8) bytes, MSB-first.
+// Leptonica 1bpp: each row is ceil(w/32)*4 bytes (32-bit words), MSB-first.
+// Both are MSB-first so we can copy row-by-row with word-alignment padding.
+// Returns nullptr on failure. Caller must pixDestroy().
+static PIX *renderBlackToPix1bpp(ddjvu_page_t *page,
+                                  int w, int h)
+{
+  const int srcStride = (w + 7) / 8;   // bytes per row, MSBTOLSB
+  QByteArray buf(h * srcStride, '\0');
+
+  ddjvu_rect_t rect; rect.x = rect.y = 0;
+  rect.w = (unsigned)w; rect.h = (unsigned)h;
+  ddjvu_format_t *fmt = ddjvu_format_create(DDJVU_FORMAT_MSBTOLSB, 0, nullptr);
+  ddjvu_format_set_row_order(fmt, 1);
+  bool ok = ddjvu_page_render(page, DDJVU_RENDER_BLACK,
+                               &rect, &rect, fmt,
+                               srcStride,
+                               buf.data());
+  ddjvu_format_release(fmt);
+  if (!ok) return nullptr;
+
+  PIX *pix = pixCreate(w, h, 1);
+  if (!pix) return nullptr;
+  const int wpl = pixGetWpl(pix);          // 32-bit words per row in Leptonica
+  const int dstStride = wpl * 4;           // bytes per row in Leptonica
+
+  for (int y = 0; y < h; y++) {
+    const uchar  *src = reinterpret_cast<const uchar *>(buf.constData()) + y * srcStride;
+    l_uint32     *dst = pixGetData(pix) + y * wpl;
+    memset(dst, 0, dstStride);
+    // Copy full bytes; remaining bits within last partial word are already 0.
+    memcpy(dst, src, srcStride);
+    // ddjvu gives MSBTOLSB (byte 0 = leftmost 8 pixels, bit7=pixel0).
+    // Leptonica wants the same bit order but in big-endian 32-bit words.
+    // On little-endian (x86/x64) we need to byte-swap each 32-bit word.
+    for (int word = 0; word < wpl; word++) {
+      const l_uint32 v = dst[word];
+      dst[word] = ((v & 0xFF000000u) >> 24)
+                | ((v & 0x00FF0000u) >>  8)
+                | ((v & 0x0000FF00u) <<  8)
+                | ((v & 0x000000FFu) << 24);
+    }
+  }
+  return pix;
+}
+
 // Encode a grayscale QImage as a single-page JBIG2 generic region.
 // Returns raw segment data suitable for /JBIG2Decode embedding (no globals).
 // full_headers=false → no JBIG2 file header → correct for PDF.
@@ -1847,6 +1895,25 @@ static QByteArray encodeJbig2Generic(const QImage &grayImg)
   if (!data || len <= 0) return {};
   QByteArray result(reinterpret_cast<const char *>(data), len);
   free(data);   // malloced by jbig2enc
+  return result;
+}
+
+// Encode a DjVu page black stencil as JBIG2 using 1bpp direct render.
+// Renders RENDER_BLACK at w×h, produces Leptonica PIX* via renderBlackToPix1bpp(),
+// then JBIG2-encodes it. No intermediate grayscale / threshold.
+static QByteArray encodeJbig2BlackRender(ddjvu_page_t *page, int w, int h)
+{
+  PIX *pix = renderBlackToPix1bpp(page, w, h);
+  if (!pix) return {};
+  int      len  = 0;
+  uint8_t *data = jbig2_encode_generic(pix,
+                    /*full_headers=*/false,
+                    /*xres=*/0, /*yres=*/0,
+                    /*dup_line_removal=*/false, &len);
+  pixDestroy(&pix);
+  if (!data || len <= 0) return {};
+  QByteArray result(reinterpret_cast<const char *>(data), len);
+  free(data);
   return result;
 }
 
@@ -2560,20 +2627,9 @@ QDjViewPdfTextExporter::doPage()
   // for now — small file, artifact-free text.
   const ddjvu_page_type_t earlyType = ddjvu_page_get_type(*page);
   if (earlyType == DDJVU_PAGETYPE_COMPOUND && renderMode == DDJVU_RENDER_COLOR) {
-    ddjvu_rect_t brect; brect.x = brect.y = 0;
-    brect.w = (unsigned)srcW; brect.h = (unsigned)srcH;
-    ddjvu_format_t *fmtB = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
-    ddjvu_format_set_row_order(fmtB, 1);
-    QImage bimg(srcW, srcH, QImage::Format_RGB888);
-    bimg.fill(Qt::white);
-    const bool blackOk = ddjvu_page_render(*page, DDJVU_RENDER_BLACK,
-                           &brect, &brect, fmtB,
-                           bimg.bytesPerLine(),
-                           reinterpret_cast<char *>(bimg.bits()));
-    ddjvu_format_release(fmtB);
-    if (blackOk) {
-      QImage bGray = bimg.convertToFormat(QImage::Format_Grayscale8);
-      QByteArray jbig2Data = encodeJbig2Generic(bGray);
+    // Use 1bpp direct render — no RGB24 intermediate, no threshold needed.
+    QByteArray jbig2Data = encodeJbig2BlackRender(*page, srcW, srcH);
+    {
       const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
       if (jbig2Data.isEmpty()) {
         // fallback: gray JPEG at renderDpi
@@ -2657,8 +2713,8 @@ QDjViewPdfTextExporter::doPage()
   bool isJbig2 = false;
 
   if (isGrayImg && forceJbig2) {
-    // Stencil render — JBIG2 is safe and gives best compression.
-    imgData = encodeJbig2Generic(qimg);
+    // 1bpp direct render — bypasses RGB24->Gray8->threshold pipeline.
+    imgData = encodeJbig2BlackRender(*page, qimg.width(), qimg.height());
     if (!imgData.isEmpty()) {
       isJbig2 = true;
     } else {
