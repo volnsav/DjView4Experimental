@@ -2610,12 +2610,8 @@ QDjViewPdfTextExporter::doPage()
     ddjvu_page_render(*page, DDJVU_RENDER_FOREGROUND, &fgrect, &fgrect, fmtFg,
                       fgImg.bytesPerLine(), reinterpret_cast<char *>(fgImg.bits()));
     ddjvu_format_release(fmtFg);
-    // FG is mostly white (background areas) with sparse dark marks (stencil).
-    // Low JPEG quality suffices — flat white compresses well regardless,
-    // and the stencil edges are sharpened by the Multiply blend with BG.
-    const int fgJpegQ = qMax(5, jpegQ / 4);
     QByteArray fgData = encodeJpegGray(
-      fgImg.convertToFormat(QImage::Format_Grayscale8), fgJpegQ);
+      fgImg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
 
     // Collect text words (coordinate scaling uses renderW/H dimensions).
     QVector<PdfWordZone> words;
