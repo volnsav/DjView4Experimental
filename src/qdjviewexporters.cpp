@@ -1950,7 +1950,11 @@ QDjViewPdfTextExporter::doPage()
     pdfWriter->newPage();
   }
 
-  // Render DjVu page to an RGB888 QImage.
+  // Render DjVu page directly into a Format_RGB32 QImage.
+  // Using RGBMASK32 (same as QDjViewImgExporter) renders into the image's
+  // own buffer – no intermediate copy, and Format_RGB32 has no alpha channel
+  // so QPdfEngine will embed it as DCT/JPEG (compact) instead of
+  // FlateDecode/zlib (5-8× larger).
   ddjvu_render_mode_t renderMode = DDJVU_RENDER_COLOR;
   {
     QDjVuWidget::DisplayMode dm = djview->getDjVuWidget()->displayMode();
@@ -1962,43 +1966,43 @@ QDjViewPdfTextExporter::doPage()
   rect.x = rect.y = 0;
   rect.w = (unsigned)renderW;
   rect.h = (unsigned)renderH;
-  ddjvu_format_t *fmt = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
-  ddjvu_format_set_row_order(fmt, 1);  // top-to-bottom
+
+  // ARGB masks matching QImage::Format_RGB32 memory layout (0x00RRGGBB).
+  unsigned int masks[4] = { 0xff0000, 0xff00, 0xff, 0xff000000 };
+  ddjvu_format_t *fmt = ddjvu_format_create(DDJVU_FORMAT_RGBMASK32, 4, masks);
+  ddjvu_format_set_row_order(fmt, 1);   // top-to-bottom
   ddjvu_format_set_gamma(fmt, 2.2);
-  const int rowBytes = renderW * 3;
-  QByteArray imgBuf(rowBytes * renderH, '\xff');
-  if (!ddjvu_page_render(*page, renderMode, &rect, &rect, fmt,
-                         rowBytes, imgBuf.data()))
-    memset(imgBuf.data(), 0xff, imgBuf.size());  // white fallback
+
+  QImage qimg(renderW, renderH, QImage::Format_RGB32);
+  qimg.fill(Qt::white);   // safe default if render is partial
+
+  const bool renderOk = ddjvu_page_render(
+        *page, renderMode, &rect, &rect, fmt,
+        qimg.bytesPerLine(),
+        reinterpret_cast<char *>(qimg.bits()));
   ddjvu_format_release(fmt);
 
-  // Build QImage from the rendered RGB24 buffer.
-  QImage qimg(
-    reinterpret_cast<const uchar *>(imgBuf.constData()),
-    renderW, renderH, rowBytes, QImage::Format_RGB888);
+  if (!renderOk)
+    qimg.fill(Qt::white);   // render not ready – show white rather than garbage
 
-  // CRITICAL: QPdfEngine checks image.hasAlphaChannel() to choose DCT vs FlateDecode.
-  //   Format_RGB888 → Qt internally converts to ARGB32_Premultiplied (adds alpha field)
-  //                 → QPdfEngine sees alpha → uses FlateDecode (zlib) → 5-8× larger file
-  //   Format_RGB32  → no alpha channel → QPdfEngine uses DCT (JPEG) → compact PDF
-  //
-  // We also honour the JPEG quality spinbox here: compress to JPEG at the
-  // requested quality then reload as Format_RGB32 (which QPdfEngine will embed
-  // as another JPEG pass at its default quality ~75).  For typical quality
-  // values the double-pass artefacts are imperceptible, and the size/quality
-  // tradeoff is meaningful especially at lower settings.
+  // Optional: pre-compress to JPEG at the user's quality setting so the
+  // final PDF embeds the image at that quality rather than QPdfEngine's
+  // fixed default (~75).  On failure we keep the original RGB32 image
+  // (QPdfEngine will still use JPEG, just at its own quality level).
   const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
-  {
+  if (jpegQ != 75) {   // skip round-trip when quality matches Qt's default
     QByteArray jpegBuf;
-    QBuffer    buf(&jpegBuf);
-    buf.open(QIODevice::WriteOnly);
-    qimg.save(&buf, "JPEG", jpegQ);   // apply user quality; also detaches from imgBuf
-    qimg = QImage::fromData(jpegBuf, "JPEG");  // decoded as Format_RGB32, hasAlphaChannel()==false
+    QBuffer    jbuf(&jpegBuf);
+    jbuf.open(QIODevice::WriteOnly);
+    if (qimg.save(&jbuf, "JPEG", jpegQ)) {
+      jbuf.close();
+      QImage decoded = QImage::fromData(jpegBuf, "JPEG");
+      if (!decoded.isNull())
+        qimg = decoded;   // Format_RGB888, hasAlphaChannel()==false → still JPEG in PDF
+    }
   }
 
   // ---- 1. Draw the raster image, scaled to fill the physical page --------
-  // QPainter scales qimg from renderW×renderH to pageW×pageH automatically.
-  // QPdfEngine will embed it via DCT (JPEG) because qimg.hasAlphaChannel()==false.
   painter->drawImage(QRect(0, 0, pageW, pageH), qimg);
 
   // ---- 2. Invisible text overlay (searchable PDF) -----------------------
