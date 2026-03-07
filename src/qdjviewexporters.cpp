@@ -1831,6 +1831,7 @@ public:
   // Add one page. jpeg must be a valid JPEG byte stream (header FF D8).
   bool addPage(double mmW, double mmH,
                const QByteArray &jpeg, int imgW, int imgH,
+               bool isGray,
                const QVector<PdfWordZone> &words)
   {
     if (!file_.isOpen()) return false;
@@ -1848,10 +1849,12 @@ public:
     write(baf(
       "<< /Type /XObject /Subtype /Image\n"
       "   /Width %d /Height %d\n"
-      "   /ColorSpace /DeviceRGB /BitsPerComponent 8\n"
+      "   /ColorSpace %s /BitsPerComponent 8\n"
       "   /Filter /DCTDecode /Length %d >>\n"
       "stream\n",
-      imgW, imgH, (int)jpeg.size()));
+      imgW, imgH,
+      isGray ? "/DeviceGray" : "/DeviceRGB",
+      (int)jpeg.size()));
     file_.write(jpeg);
     write("\nendstream\n");
     endObj();
@@ -2239,14 +2242,25 @@ QDjViewPdfTextExporter::doPage()
     else if (dm == QDjVuWidget::DISPLAY_FG)      renderMode = DDJVU_RENDER_FOREGROUND;
   }
 
-  // Render into Format_RGB888 (24-bit RGB, no alpha — JPEG-compatible).
+  // Use grayscale JPEG for bitonal (B&W) pages or stencil render mode —
+  // produces ~3× smaller files because libjpeg encodes 1 channel not 3.
+  // COMPOUND/PHOTO pages in normal color mode are kept as RGB.
+  const bool useGray =
+      (ddjvu_page_get_type(*page) == DDJVU_PAGETYPE_BITONAL)
+      || (renderMode == DDJVU_RENDER_BLACK);
+
+  // Render into the appropriate Qt image format.
   ddjvu_rect_t rect; rect.x = rect.y = 0;
   rect.w = (unsigned)renderW;
   rect.h = (unsigned)renderH;
-  ddjvu_format_t *fmt = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+  const ddjvu_format_style_t fmtStyle =
+      useGray ? DDJVU_FORMAT_GREY8 : DDJVU_FORMAT_RGB24;
+  const QImage::Format imgFmt =
+      useGray ? QImage::Format_Grayscale8 : QImage::Format_RGB888;
+  ddjvu_format_t *fmt = ddjvu_format_create(fmtStyle, 0, nullptr);
   ddjvu_format_set_row_order(fmt, 1);
-  ddjvu_format_set_gamma(fmt, 2.2);
-  QImage qimg(renderW, renderH, QImage::Format_RGB888);
+  if (!useGray) ddjvu_format_set_gamma(fmt, 2.2); // gamma not applicable to grey
+  QImage qimg(renderW, renderH, imgFmt);
   qimg.fill(Qt::white);
   const bool renderOk = ddjvu_page_render(
     *page, renderMode, &rect, &rect, fmt,
@@ -2276,7 +2290,7 @@ QDjViewPdfTextExporter::doPage()
                pageno + 1, qPrintable(writer.errorString()));
       jpeg.clear();
       QBuffer buf2(&jpeg); buf2.open(QIODevice::WriteOnly);
-      QImage white(renderW, renderH, QImage::Format_RGB888);
+      QImage white(renderW, renderH, imgFmt);
       white.fill(Qt::white);
       QImageWriter w2(&buf2, "JPEG"); w2.setQuality(75);
       if (!w2.write(white)) {
@@ -2287,7 +2301,7 @@ QDjViewPdfTextExporter::doPage()
     }
   }
 
-  if (!rawPdf->addPage(mmW, mmH, jpeg, renderW, renderH, words))
+  if (!rawPdf->addPage(mmW, mmH, jpeg, renderW, renderH, useGray, words))
     error(tr("Failed to write PDF page %1.").arg(pageno + 1), __FILE__, __LINE__);
 }
 
