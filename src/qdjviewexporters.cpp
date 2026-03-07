@@ -1828,41 +1828,15 @@ public:
 
   bool isOpen() const { return file_.isOpen(); }
 
-  // Render one page. qimg must be Format_RGB32.
-  // djvuImgDpi: DjVu page resolution (determines coordinate scale to PDF pts).
+  // Add one page. jpeg must be a valid JPEG byte stream (header FF D8).
   bool addPage(double mmW, double mmH,
-               const QImage &qimg, int djvuImgDpi,
+               const QByteArray &jpeg, int imgW, int imgH,
                const QVector<PdfWordZone> &words)
   {
     if (!file_.isOpen()) return false;
-    const int imgW = qimg.width();
-    const int imgH = qimg.height();
-
-    // Compress to JPEG.
-    // Convert to Format_RGB888 first: Format_RGB32 may have alpha=0 pixels
-    // (ddjvu with RGBMASK32 doesn't guarantee alpha bits on all versions),
-    // which some Qt JPEG plugin builds refuse to encode.
-    QByteArray jpeg;
-    {
-      QBuffer buf(&jpeg);
-      buf.open(QIODevice::WriteOnly);
-      const QImage toEncode = (qimg.format() == QImage::Format_RGB888)
-                                  ? qimg
-                                  : qimg.convertToFormat(QImage::Format_RGB888);
-      toEncode.save(&buf, "JPEG", jpegQ_);
-    }
-    // If JPEG encoding failed (plugin not found, etc.) fall back to a white
-    // placeholder so the rest of the pages are not lost.
     if (jpeg.isEmpty() || (unsigned char)(jpeg[0]) != 0xFF
-                       || (unsigned char)(jpeg[1]) != 0xD8) {
-      // Encode a tiny 1×1 white JPEG as placeholder.
-      QImage white(imgW, imgH, QImage::Format_RGB888);
-      white.fill(Qt::white);
-      QBuffer buf2(&jpeg); buf2.open(QIODevice::WriteOnly);
-      white.save(&buf2, "JPEG", 75);
-      // If still failing, truly skip (should never happen with a correct Qt install).
-      if (jpeg.isEmpty()) return false;
-    }
+                       || (unsigned char)(jpeg[1]) != 0xD8)
+      return false;  // caller must supply a valid JPEG
 
     // Page dimensions in PDF points (1 pt = 1/72 inch).
     const double ptW = mmW / 25.4 * 72.0;
@@ -2288,7 +2262,32 @@ QDjViewPdfTextExporter::doPage()
       pdfCollectWords(textExpr, words);
   }
 
-  if (!rawPdf->addPage(mmW, mmH, qimg, imgdpi, words))
+  // Compress to JPEG using QImageWriter (gives proper error strings).
+  // qimg is Format_RGB888 which libjpeg/Qt handles cleanly.
+  QByteArray jpeg;
+  {
+    QBuffer buf(&jpeg);
+    buf.open(QIODevice::WriteOnly);
+    QImageWriter writer(&buf, "JPEG");
+    writer.setQuality(qBound(1, ui.jpegQualitySpinBox->value(), 100));
+    if (!writer.write(qimg)) {
+      // JPEG encode failed: substitute a white page and continue export.
+      qWarning("DjView PDF export: page %d JPEG encode failed: %s",
+               pageno + 1, qPrintable(writer.errorString()));
+      jpeg.clear();
+      QBuffer buf2(&jpeg); buf2.open(QIODevice::WriteOnly);
+      QImage white(renderW, renderH, QImage::Format_RGB888);
+      white.fill(Qt::white);
+      QImageWriter w2(&buf2, "JPEG"); w2.setQuality(75);
+      if (!w2.write(white)) {
+        error(tr("Failed to write PDF page %1: JPEG plugin unavailable.")
+              .arg(pageno + 1), __FILE__, __LINE__);
+        return;
+      }
+    }
+  }
+
+  if (!rawPdf->addPage(mmW, mmH, jpeg, renderW, renderH, words))
     error(tr("Failed to write PDF page %1.").arg(pageno + 1), __FILE__, __LINE__);
 }
 
