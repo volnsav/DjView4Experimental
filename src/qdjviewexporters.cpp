@@ -2111,11 +2111,11 @@ public:
   //   mask = RENDER_BLACK JBIG2 stencil at native DPI
   //   FG   = RENDER_FOREGROUND JPEG at renderDpi, clipped by /Mask <maskObj>
   //
-  // The mask XObject uses /ColorSpace /DeviceGray /BitsPerComponent 1
-  // (NOT /ImageMask true) because it is referenced as an explicit /Mask
-  // on the FG XObject, not painted standalone. PDF spec: explicit /Mask
-  // image must have a colour space, not /ImageMask.
-  // Mask sample 0 = ink → paint FG pixel; 1 = paper → transparent (BG shows).
+  // The mask XObject uses /ImageMask true (required by PDF spec: explicit
+  // /Mask image reference must be an image mask). With default /Decode [0 1]:
+  // sample 1 = ink = opaque (paint FG pixel); sample 0 = paper = transparent
+  // (BG shows through). Our JBIG2: 1=black(ink), 0=white(paper) — matches.
+  // FG is rendered at native DPI (srcW×srcH) for pixel-perfect text edges.
   bool addCompoundPage(double mmW, double mmH,
                        const QByteArray &bgData,   int bgW,   int bgH,   bool bgIsGray,
                        const QByteArray &fgData,   int fgW,   int fgH,   bool fgIsGray,
@@ -2128,14 +2128,15 @@ public:
     const double ptW = mmW / 25.4 * 72.0;
     const double ptH = mmH / 25.4 * 72.0;
 
-    // 1. Mask XObject (JBIG2 1bpp).
-    // No /ImageMask true here — it serves as an explicit /Mask for the FG.
+    // 1. Mask XObject (JBIG2 1bpp, /ImageMask true).
+    // PDF spec requires /Mask reference to be an image mask.
+    // Default /Decode [0 1]: sample 1 → opaque, sample 0 → transparent.
     const int maskObj = alloc();
     beginObj(maskObj);
     write(baf(
       "<< /Type /XObject /Subtype /Image\n"
       "   /Width %d /Height %d\n"
-      "   /ColorSpace /DeviceGray /BitsPerComponent 1\n"
+      "   /ImageMask true /BitsPerComponent 1\n"
       "   /Filter /JBIG2Decode /Length %d >>\n"
       "stream\n",
       maskW, maskH, (int)maskData.size()));
@@ -2158,6 +2159,7 @@ public:
     endObj();
 
     // 3. Foreground XObject (JPEG) clipped by the mask.
+    // /Mask <maskObj>: where mask sample=1 (ink) → FG opaque; sample=0 → transparent.
     const int fgObj = alloc();
     beginObj(fgObj);
     write(baf(
@@ -2674,15 +2676,17 @@ QDjViewPdfTextExporter::doPage()
         }
       }
     }
-    // 2. FG: RENDER_FOREGROUND (FGbz layer, colored or gray fills)
+    // 2. FG: RENDER_FOREGROUND at native DPI (FGbz fills + stencil text)
+    // At native DPI the Sjbz stencil maps 1:1 to pixels — no anti-aliasing,
+    // so text edges are pixel-perfect (matching the JBIG2 mask exactly).
     QByteArray fgData;
     bool fgIsGray = false;
     {
       ddjvu_rect_t frect; frect.x = frect.y = 0;
-      frect.w = (unsigned)renderW; frect.h = (unsigned)renderH;
+      frect.w = (unsigned)srcW; frect.h = (unsigned)srcH;
       ddjvu_format_t *fmtFg = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
       ddjvu_format_set_row_order(fmtFg, 1);
-      QImage fgImg(renderW, renderH, QImage::Format_RGB888);
+      QImage fgImg(srcW, srcH, QImage::Format_RGB888);
       fgImg.fill(Qt::white);
       const bool fgOk = ddjvu_page_render(*page, DDJVU_RENDER_FOREGROUND,
                            &frect, &frect, fmtFg,
@@ -2692,7 +2696,7 @@ QDjViewPdfTextExporter::doPage()
       if (fgOk) {
         // Chroma check to choose gray vs RGB JPEG for FG.
         const uchar *bits = fgImg.constBits();
-        const int total = renderW * renderH;
+        const int total = srcW * srcH;
         const int step = qMax(1, total / 2000);
         bool hasColor = false;
         for (int px = 0; px < total && !hasColor; px += step) {
@@ -2737,7 +2741,7 @@ QDjViewPdfTextExporter::doPage()
       const bool addOk = rawPdf->addCompoundPage(
         mmW, mmH,
         bgData,   renderW, renderH, bgIsGray,
-        fgData,   renderW, renderH, fgIsGray,
+        fgData,   srcW,    srcH,    fgIsGray,
         maskData, srcW,    srcH,
         words);
       if (!addOk)
