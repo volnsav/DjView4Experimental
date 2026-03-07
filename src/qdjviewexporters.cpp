@@ -2106,25 +2106,44 @@ public:
     return true;
   }
 
-  // Add a compound (layered) page.
-  // fgIsJbig2=false: FG = RENDER_FOREGROUND gray JPEG + Multiply blend.
-  //   Gray fills (FGbz) are correctly preserved. Text at JPEG 300dpi quality.
-  // fgIsJbig2=true: FG = RENDER_BLACK JBIG2 stencil as /ImageMask.
-  //   Text is native-DPI pixel-perfect. Only use when no FGbz gray fills.
-  // BG is always RENDER_BACKGROUND JPEG (IW44 layer, no stencil).
+  // Add a compound (layered) page using three layers:
+  //   BG   = RENDER_BACKGROUND JPEG (IW44 layer — photo, paper texture)
+  //   mask = RENDER_BLACK JBIG2 stencil at native DPI
+  //   FG   = RENDER_FOREGROUND JPEG at renderDpi, clipped by /Mask <maskObj>
+  //
+  // The mask XObject uses /ColorSpace /DeviceGray /BitsPerComponent 1
+  // (NOT /ImageMask true) because it is referenced as an explicit /Mask
+  // on the FG XObject, not painted standalone. PDF spec: explicit /Mask
+  // image must have a colour space, not /ImageMask.
+  // Mask sample 0 = ink → paint FG pixel; 1 = paper → transparent (BG shows).
   bool addCompoundPage(double mmW, double mmH,
-                       const QByteArray &bgData, int bgW, int bgH, bool bgIsGray,
-                       const QByteArray &fgData, int fgW, int fgH,
-                       bool fgIsJbig2,
+                       const QByteArray &bgData,   int bgW,   int bgH,   bool bgIsGray,
+                       const QByteArray &fgData,   int fgW,   int fgH,   bool fgIsGray,
+                       const QByteArray &maskData, int maskW, int maskH,
                        const QVector<PdfWordZone> &words)
   {
     if (!file_.isOpen()) return false;
-    if (bgData.isEmpty() || fgData.isEmpty()) return false;
+    if (bgData.isEmpty() || fgData.isEmpty() || maskData.isEmpty()) return false;
 
     const double ptW = mmW / 25.4 * 72.0;
     const double ptH = mmH / 25.4 * 72.0;
 
-    // Background image XObject (JPEG, gray or RGB).
+    // 1. Mask XObject (JBIG2 1bpp).
+    // No /ImageMask true here — it serves as an explicit /Mask for the FG.
+    const int maskObj = alloc();
+    beginObj(maskObj);
+    write(baf(
+      "<< /Type /XObject /Subtype /Image\n"
+      "   /Width %d /Height %d\n"
+      "   /ColorSpace /DeviceGray /BitsPerComponent 1\n"
+      "   /Filter /JBIG2Decode /Length %d >>\n"
+      "stream\n",
+      maskW, maskH, (int)maskData.size()));
+    file_.write(maskData);
+    write("\nendstream\n");
+    endObj();
+
+    // 2. Background XObject (JPEG).
     const int bgObj = alloc();
     beginObj(bgObj);
     write(baf(
@@ -2138,48 +2157,31 @@ public:
     write("\nendstream\n");
     endObj();
 
-    // Foreground XObject: JBIG2 /ImageMask or gray JPEG for Multiply.
+    // 3. Foreground XObject (JPEG) clipped by the mask.
     const int fgObj = alloc();
     beginObj(fgObj);
-    if (fgIsJbig2) {
-      write(baf(
-        "<< /Type /XObject /Subtype /Image\n"
-        "   /Width %d /Height %d\n"
-        "   /ImageMask true /BitsPerComponent 1\n"
-        "   /Filter /JBIG2Decode /Length %d >>\n"
-        "stream\n",
-        fgW, fgH, (int)fgData.size()));
-    } else {
-      write(baf(
-        "<< /Type /XObject /Subtype /Image\n"
-        "   /Width %d /Height %d\n"
-        "   /ColorSpace /DeviceGray /BitsPerComponent 8\n"
-        "   /Filter /DCTDecode /Length %d >>\n"
-        "stream\n",
-        fgW, fgH, (int)fgData.size()));
-    }
+    write(baf(
+      "<< /Type /XObject /Subtype /Image\n"
+      "   /Width %d /Height %d\n"
+      "   /ColorSpace %s /BitsPerComponent 8\n"
+      "   /Filter /DCTDecode\n"
+      "   /Mask %d 0 R\n"
+      "   /Length %d >>\n"
+      "stream\n",
+      fgW, fgH,
+      fgIsGray ? "/DeviceGray" : "/DeviceRGB",
+      maskObj,
+      (int)fgData.size()));
     file_.write(fgData);
     write("\nendstream\n");
     endObj();
 
-    // ExtGState for Multiply (only in non-JBIG2 mode).
-    int gsObj = -1;
-    if (!fgIsJbig2) {
-      gsObj = alloc();
-      beginObj(gsObj);
-      write("<< /Type /ExtGState /BM /Multiply >>\n");
-      endObj();
-    }
-
-    // Content stream.
-    const double sx = ptW / fgW;
-    const double sy = ptH / fgH;
+    // 4. Content stream.
+    const double sx = ptW  / maskW;
+    const double sy = ptH  / maskH;
     QByteArray cs;
     cs += baf("q\n%.4f 0 0 %.4f 0 0 cm\n/BG Do\nQ\n", ptW, ptH);
-    if (fgIsJbig2)
-      cs += baf("q\n0 g\n%.4f 0 0 %.4f 0 0 cm\n/FG Do\nQ\n", ptW, ptH);
-    else
-      cs += baf("q\n/GSmul gs\n%.4f 0 0 %.4f 0 0 cm\n/FG Do\nQ\n", ptW, ptH);
+    cs += baf("q\n%.4f 0 0 %.4f 0 0 cm\n/FG Do\nQ\n", ptW, ptH);
     if (!words.isEmpty()) {
       cs += "BT\n3 Tr\n";
       for (const PdfWordZone &w : words) {
@@ -2210,27 +2212,16 @@ public:
     write("\nendstream\n");
     endObj();
 
-    // Page object.
+    // 5. Page object (no ExtGState needed).
     const int pageObj = alloc();
     beginObj(pageObj);
-    if (fgIsJbig2) {
-      write(baf(
-        "<< /Type /Page /Parent 2 0 R\n"
-        "   /MediaBox [0 0 %.4f %.4f]\n"
-        "   /Contents %d 0 R\n"
-        "   /Resources << /XObject << /BG %d 0 R /FG %d 0 R >>\n"
-        "                 /Font << /F0 3 0 R >> >> >>\n",
-        ptW, ptH, csObj, bgObj, fgObj));
-    } else {
-      write(baf(
-        "<< /Type /Page /Parent 2 0 R\n"
-        "   /MediaBox [0 0 %.4f %.4f]\n"
-        "   /Contents %d 0 R\n"
-        "   /Resources << /XObject << /BG %d 0 R /FG %d 0 R >>\n"
-        "                 /ExtGState << /GSmul %d 0 R >>\n"
-        "                 /Font << /F0 3 0 R >> >> >>\n",
-        ptW, ptH, csObj, bgObj, fgObj, gsObj));
-    }
+    write(baf(
+      "<< /Type /Page /Parent 2 0 R\n"
+      "   /MediaBox [0 0 %.4f %.4f]\n"
+      "   /Contents %d 0 R\n"
+      "   /Resources << /XObject << /BG %d 0 R /FG %d 0 R >>\n"
+      "                 /Font << /F0 3 0 R >> >> >>\n",
+      ptW, ptH, csObj, bgObj, fgObj));
     endObj();
 
     pageObjs_.append(pageObj);
@@ -2640,18 +2631,12 @@ QDjViewPdfTextExporter::doPage()
     useGray = !hasColor;
   }
 
-  // COMPOUND pages: BG = RENDER_BACKGROUND JPEG at renderDpi (IW44 layer only:
-  // photo, paper texture — no Sjbz text) + FG = RENDER_BLACK JBIG2 stencil at
-  // native DPI drawn as /ImageMask (sharp black text/lines on top).
-  // Using RENDER_BACKGROUND avoids double-rendering: the RENDER_COLOR image
-  // contains anti-aliased text at 300dpi which would show as a gray halo under
-  // the sharp JBIG2 stencil. RENDER_BACKGROUND has only the IW44 background.
-  // BITONAL pages: skip this path, go straight to JBIG2-only below.
+  // COMPOUND pages: Extract 3 separate layers (BG, FG, Mask) and composite them.
   bool forceJbig2 = isBitonalEarly;
   const ddjvu_page_type_t earlyType = ddjvu_page_get_type(*page);
   if (earlyType == DDJVU_PAGETYPE_COMPOUND && renderMode == DDJVU_RENDER_COLOR) {
     const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
-    // BG: fresh RENDER_BACKGROUND render at renderDpi (IW44 layer, no stencil).
+    // 1. BG: RENDER_BACKGROUND (IW44 layer, no stencil)
     QByteArray bgData;
     bool bgIsGray = false;
     {
@@ -2689,89 +2674,48 @@ QDjViewPdfTextExporter::doPage()
         }
       }
     }
-    // Decide FG mode by checking whether the gray fills are already in
-    // RENDER_BACKGROUND (IW44) or only in FGbz (stencil colorization):
-    //
-    //  - If RENDER_BACKGROUND already has significant dark/gray content
-    //    (non-white pixels), those fills are in IW44 → BG JPEG already
-    //    carries them → use sharp JBIG2 ImageMask (no Multiply needed).
-    //
-    //  - If BG is nearly all white but RENDER_FOREGROUND has gray pixels,
-    //    the gray fills live only in FGbz → must use Multiply with
-    //    RENDER_FOREGROUND gray JPEG to preserve them (text will be 300dpi
-    //    JPEG quality in this case).
-    //
-    bool bgHasGrayContent = false;
-    if (!bgData.isEmpty()) {
-      // Re-examine the already-rendered bgImg via its JPEG would be lossy;
-      // instead re-check the pixel data we still have in bgImg.
-      // We need bgImg from the render above — capture it outside the block.
-    }
-    // Re-render BG into a persistent image for the gray-content probe.
-    QImage bgImgProbe;
-    bool fgNeedsMultiply = false;
-    {
-      ddjvu_rect_t brect2; brect2.x = brect2.y = 0;
-      brect2.w = (unsigned)renderW; brect2.h = (unsigned)renderH;
-      // Use a small subsample for speed: render at renderDpi (already done),
-      // just re-use the GREY8 format for the probe.
-      ddjvu_format_t *fmtProbe = ddjvu_format_create(DDJVU_FORMAT_GREY8, 0, nullptr);
-      ddjvu_format_set_row_order(fmtProbe, 1);
-      QImage probeImg(renderW, renderH, QImage::Format_Grayscale8);
-      probeImg.fill(Qt::white);
-      if (ddjvu_page_render(*page, DDJVU_RENDER_BACKGROUND,
-                            &brect2, &brect2, fmtProbe,
-                            probeImg.bytesPerLine(),
-                            reinterpret_cast<char *>(probeImg.bits()))) {
-        // Count pixels darker than 210 (covers light grays like table headers).
-        const uchar *bits2 = probeImg.constBits();
-        const int total2 = renderW * renderH;
-        const int step2  = qMax(1, total2 / 2000);
-        int darkCount = 0;
-        for (int px = 0; px < total2; px += step2)
-          if (bits2[px] < 210) ++darkCount;
-        // If >2% of sampled pixels are non-white → IW44 has the gray fills.
-        bgHasGrayContent = (darkCount > (total2 / step2) / 50);
-      }
-      ddjvu_format_release(fmtProbe);
-
-      if (!bgHasGrayContent) {
-        // BG is nearly white → probe RENDER_FOREGROUND for FGbz gray.
-        ddjvu_rect_t frect2; frect2.x = frect2.y = 0;
-        frect2.w = (unsigned)renderW; frect2.h = (unsigned)renderH;
-        ddjvu_format_t *fmtFg2 = ddjvu_format_create(DDJVU_FORMAT_GREY8, 0, nullptr);
-        ddjvu_format_set_row_order(fmtFg2, 1);
-        QImage fgProbe(renderW, renderH, QImage::Format_Grayscale8);
-        fgProbe.fill(Qt::white);
-        if (ddjvu_page_render(*page, DDJVU_RENDER_FOREGROUND,
-                              &frect2, &frect2, fmtFg2,
-                              fgProbe.bytesPerLine(),
-                              reinterpret_cast<char *>(fgProbe.bits()))) {
-          const uchar *fgBits = fgProbe.constBits();
-          const int total3 = renderW * renderH;
-          const int step3  = qMax(1, total3 / 2000);
-          for (int px = 0; px < total3 && !fgNeedsMultiply; px += step3) {
-            const uchar v = fgBits[px];
-            if (v > 10 && v < 245) fgNeedsMultiply = true;
-          }
-          if (fgNeedsMultiply) bgImgProbe = std::move(fgProbe);
-        }
-        ddjvu_format_release(fmtFg2);
-      }
-    }
+    // 2. FG: RENDER_FOREGROUND (FGbz layer, colored or gray fills)
     QByteArray fgData;
-    bool fgIsJbig2 = false;
-    int  fgW = renderW, fgH = renderH;
-    if (fgNeedsMultiply) {
-      // True FGbz-only gray fills: Multiply with RENDER_FOREGROUND gray JPEG.
-      fgData = encodeJpegGray(bgImgProbe, jpegQ);
-    } else {
-      // ImageMask path: FG = RENDER_BLACK JBIG2 at native DPI.
-      fgData = encodeJbig2BlackRender(*page, srcW, srcH);
-      fgIsJbig2 = true;
-      fgW = srcW; fgH = srcH;
+    bool fgIsGray = false;
+    {
+      ddjvu_rect_t frect; frect.x = frect.y = 0;
+      frect.w = (unsigned)renderW; frect.h = (unsigned)renderH;
+      ddjvu_format_t *fmtFg = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+      ddjvu_format_set_row_order(fmtFg, 1);
+      QImage fgImg(renderW, renderH, QImage::Format_RGB888);
+      fgImg.fill(Qt::white);
+      const bool fgOk = ddjvu_page_render(*page, DDJVU_RENDER_FOREGROUND,
+                           &frect, &frect, fmtFg,
+                           fgImg.bytesPerLine(),
+                           reinterpret_cast<char *>(fgImg.bits()));
+      ddjvu_format_release(fmtFg);
+      if (fgOk) {
+        // Chroma check to choose gray vs RGB JPEG for FG.
+        const uchar *bits = fgImg.constBits();
+        const int total = renderW * renderH;
+        const int step = qMax(1, total / 2000);
+        bool hasColor = false;
+        for (int px = 0; px < total && !hasColor; px += step) {
+          const uchar *p = bits + px * 3;
+          int diff = qMax(qAbs((int)p[0]-(int)p[1]),
+                         qMax(qAbs((int)p[1]-(int)p[2]),
+                              qAbs((int)p[0]-(int)p[2])));
+          if (diff > 16) hasColor = true;
+        }
+        fgIsGray = !hasColor;
+        if (fgIsGray) {
+          fgData = encodeJpegGray(fgImg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
+        } else {
+          QBuffer buf(&fgData); buf.open(QIODevice::WriteOnly);
+          QImageWriter writer(&buf, "JPEG"); writer.setQuality(jpegQ);
+          writer.write(fgImg);
+        }
+      }
     }
-    if (!bgData.isEmpty() && !fgData.isEmpty()) {
+    // 3. Mask: RENDER_BLACK JBIG2 stencil at native DPI
+    const QByteArray maskData = encodeJbig2BlackRender(*page, srcW, srcH);
+
+    if (!bgData.isEmpty() && !fgData.isEmpty() && !maskData.isEmpty()) {
       QVector<PdfWordZone> words;
       if (ui.textLayerCheckBox->isChecked() && document) {
         miniexp_t textExpr = document->getPageText(pageno);
@@ -2782,23 +2726,27 @@ QDjViewPdfTextExporter::doPage()
         logFile_.write("page=" + QByteArray::number(pageno + 1)
           + " srcW=" + QByteArray::number(srcW) + " srcH=" + QByteArray::number(srcH)
           + " renderW=" + QByteArray::number(renderW) + " renderH=" + QByteArray::number(renderH)
-          + " type=3 gray=" + QByteArray(bgIsGray ? "1" : "0")
-          + " bgGray=" + QByteArray(bgHasGrayContent ? "1" : "0")
-          + " fgMul=" + QByteArray(fgNeedsMultiply ? "1" : "0")
-          + " [" + QByteArray(fgIsJbig2 ? "COMPOUND_JBIG2" : "COMPOUND_MULTIPLY") + "]\n"
+          + " type=3 bgGray=" + QByteArray(bgIsGray ? "1" : "0")
+          + " fgGray=" + QByteArray(fgIsGray ? "1" : "0")
+          + " [COMPOUND_3LAYER]\n"
           + "  bgSize=" + QByteArray::number(bgData.size())
-          + " fgSize=" + QByteArray::number(fgData.size()) + "\n");
+          + "  fgSize=" + QByteArray::number(fgData.size())
+          + "  maskSize=" + QByteArray::number(maskData.size()) + "\n");
         logFile_.flush();
       }
       const bool addOk = rawPdf->addCompoundPage(
-        mmW, mmH, bgData, renderW, renderH, bgIsGray,
-        fgData, fgW, fgH, fgIsJbig2, words);
+        mmW, mmH,
+        bgData,   renderW, renderH, bgIsGray,
+        fgData,   renderW, renderH, fgIsGray,
+        maskData, srcW,    srcH,
+        words);
       if (!addOk)
         error(tr("Failed to write PDF page %1.").arg(pageno + 1), __FILE__, __LINE__);
       return;
     }
     // fallback: fall through to single-image JPEG path
   }
+
 
   if (useGray) {
     QImage gray = qimg.convertToFormat(QImage::Format_Grayscale8);
