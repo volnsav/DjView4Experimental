@@ -71,6 +71,7 @@ set(DJVIEW_SOURCES
     qdjviewexportps3.ui
     qdjviewexporttiff.ui
     qdjviewexportprn.ui
+    qdjviewexportpdf.ui
     qdjviewprefsdialog.ui
     # helper C file
     tiff2pdf.c

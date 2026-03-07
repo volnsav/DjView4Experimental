@@ -81,6 +81,10 @@
 #include <QString>
 #include <QTemporaryFile>
 #include <QTimer>
+#include <QPainter>
+#include <QPageSize>
+#include <QPdfWriter>
+#include <QVector>
 
 #include <libdjvu/miniexp.h>
 #include <libdjvu/ddjvuapi.h>
@@ -1695,147 +1699,339 @@ QDjViewTiffExporter::doPage()
 
 
 // ----------------------------------------
-// QDJVIEWPDFEXPORTER
+// QDJVIEWPDFTEXTEXPORTER
+//
+// PDF exporter with optional invisible text overlay ("sandwich PDF").
+// Uses QPdfWriter + QPainter – no TIFF/tiff2pdf dependency required.
+
+#include "ui_qdjviewexportpdf.h"
+
+// Word-level zone collected from the DjVu hidden-text tree.
+struct PdfWordZone {
+  QRect   djvuRect;   // bounding box in DjVu pixels (bottom-left, y-up)
+  QString text;
+};
+
+// Recursively collect word-level zones from a miniexp text expression.
+// The DjVu text tree has the form:
+//   (keyword x1 y1 x2 y2  child1 child2 ...)  -- non-terminal
+//   (keyword x1 y1 x2 y2  "string")            -- terminal (word/char)
+static void
+pdfCollectWords(miniexp_t p, QVector<PdfWordZone> &words)
+{
+  if (!miniexp_consp(p))
+    return;
+  if (!miniexp_symbolp(miniexp_car(p)))
+    return;
+  miniexp_t r = miniexp_cdr(p);
+  // Read bounding-box integers x1 y1 x2 y2.
+  if (!miniexp_consp(r) || !miniexp_numberp(miniexp_car(r))) return;
+  int x1 = miniexp_to_int(miniexp_car(r)); r = miniexp_cdr(r);
+  if (!miniexp_consp(r) || !miniexp_numberp(miniexp_car(r))) return;
+  int y1 = miniexp_to_int(miniexp_car(r)); r = miniexp_cdr(r);
+  if (!miniexp_consp(r) || !miniexp_numberp(miniexp_car(r))) return;
+  int x2 = miniexp_to_int(miniexp_car(r)); r = miniexp_cdr(r);
+  if (!miniexp_consp(r) || !miniexp_numberp(miniexp_car(r))) return;
+  int y2 = miniexp_to_int(miniexp_car(r)); r = miniexp_cdr(r);
+  if (x2 < x1 || y2 < y1) return;
+  // Terminal node: next child is a string.
+  if (miniexp_consp(r) && miniexp_stringp(miniexp_car(r))) {
+    const char *s = miniexp_to_str(miniexp_car(r));
+    if (s && *s) {
+      PdfWordZone z;
+      z.djvuRect = QRect(x1, y1, x2 - x1, y2 - y1);
+      z.text     = QString::fromUtf8(s);
+      words.append(z);
+    }
+  } else {
+    // Non-terminal: recurse into children.
+    while (miniexp_consp(r)) {
+      pdfCollectWords(miniexp_car(r), words);
+      r = miniexp_cdr(r);
+    }
+  }
+}
 
 
-class QDjViewPdfExporter : public QDjViewTiffExporter
+class QDjViewPdfTextExporter : public QDjViewPageExporter
 {
   Q_OBJECT
 public:
   static QDjViewExporter *create(QDialog*, QDjView*, QString);
   static void setup();
 public:
-  QDjViewPdfExporter(QDialog *parent, QDjView *djview, QString name);
+  QDjViewPdfTextExporter(QDialog *parent, QDjView *djview, QString name);
+  ~QDjViewPdfTextExporter();
+  virtual void resetProperties();
+  virtual void loadProperties(QString group);
+  virtual void saveProperties(QString group);
+  virtual int propertyPages();
+  virtual QWidget* propertyPage(int num);
   virtual bool save(QString fileName);
 protected:
-  virtual void doFinal();
-protected:
-  QTemporaryFile tempFile;
-  QFile pdfFile;
+  virtual void closeFile();
+  virtual void doPage();
+private:
+  Ui::QDjViewExportPdf ui;
+  QPointer<QWidget>    settingsPage;
+  QString              outFileName;
+  QPdfWriter          *pdfWriter;
+  QPainter            *painter;
+  bool                 firstPage;
 };
 
 
 QDjViewExporter*
-QDjViewPdfExporter::create(QDialog *parent, QDjView *djview, QString name)
+QDjViewPdfTextExporter::create(QDialog *parent, QDjView *djview, QString name)
 {
   if (name == "PDF")
-    return new QDjViewPdfExporter(parent, djview, name);
-  return 0;
+    return new QDjViewPdfTextExporter(parent, djview, name);
+  return nullptr;
 }
 
 
 void
-QDjViewPdfExporter::setup()
+QDjViewPdfTextExporter::setup()
 {
   addExporterData("PDF", "pdf",
                   tr("PDF Document"),
                   tr("PDF Files (*.pdf)"),
-                  QDjViewPdfExporter::create);
+                  QDjViewPdfTextExporter::create);
 }
 
 
-QDjViewPdfExporter::QDjViewPdfExporter(QDialog *parent, QDjView *djview,
-                                         QString name)
-  : QDjViewTiffExporter(parent, djview, name)
+QDjViewPdfTextExporter::QDjViewPdfTextExporter(QDialog *parent, QDjView *djview,
+                                               QString  name)
+  : QDjViewPageExporter(parent, djview, name),
+    pdfWriter(nullptr), painter(nullptr), firstPage(true)
 {
-  page->setObjectName(tr("PDF Options", "tab caption"));
-  page->setWhatsThis(tr("<html><b>PDF options.</b><br>"
-                        "These options control the characteristics of "
-                        "the images embedded in the exported PDF files. "
-                        "The resolution box limits their maximal resolution. "
-                        "Forcing bitonal G4 compression "
-                        "encodes all pages in black and white "
-                        "using the CCITT Group 4 compression. "
-                        "Allowing JPEG compression uses lossy JPEG "
-                        "for all non bitonal or subsampled images. "
-                        "Otherwise, allowing deflate compression "
-                        "produces more compact files. "
-                        "</html>") );
+  settingsPage = new QWidget();
+  ui.setupUi(settingsPage);
+  settingsPage->setObjectName(tr("PDF Options", "tab caption"));
+  resetProperties();
+  settingsPage->setWhatsThis(
+    tr("<html><b>PDF options.</b><br>"
+       "The resolution box limits the maximum output image resolution. "
+       "JPEG quality controls image compression "
+       "(1&nbsp;=&nbsp;worst, 100&nbsp;=&nbsp;best). "
+       "Enabling the text layer embeds the hidden OCR/text stored in "
+       "the DjVu file as an invisible overlay, making the PDF "
+       "searchable and allowing copy-paste of text."
+       "</html>"));
 }
 
 
-void 
-QDjViewPdfExporter::doFinal()
+QDjViewPdfTextExporter::~QDjViewPdfTextExporter()
 {
-  QString message;
-  // close tiff
-#if HAVE_TIFF2PDF
-  tiffExporter = this;
-  TIFFSetErrorHandler(tiffHandler);
-  TIFFSetWarningHandler(0);
-  if (tiff)
-    TIFFClose(tiff);
-  tiff = 0;
-  // open files
-  TIFF *input = 0;
-  FILE *output = 0;
-  QByteArray inameArray = file.fileName().toLocal8Bit();
-  QByteArray onameArray = pdfFile.fileName().toLocal8Bit();
-  file.close();
-  if (file.open(QIODevice::ReadOnly))
-    input = TIFFFdOpen(wdup(file.handle()), inameArray.data(), "r");
-  if (pdfFile.open(QIODevice::WriteOnly))
-    output = djv_fdopen(wdup(pdfFile.handle()),"wb");
-  if (input && output)
-    {
-      const char *argv[3];
-      argv[0] = "tiff2pdf";
-      argv[1] = "-o";
-      argv[2] = onameArray.data();
-      if (tiff2pdf(input, output, 3, argv) != EXIT_SUCCESS)
-        message = tr("Error while creating pdf file.");
-    }
-  else if (! output)
-    {
-      message = tr("Unable to create output file.");
-      if (! pdfFile.errorString().isEmpty())
-        message = tr("System error: %1.").arg(pdfFile.errorString());
-    }
-  else
-    message = tr("Unable to reopen temporary file.");
-  // close all
-  if (input)
-    TIFFClose(input);
-  if (output)
-    fclose(output);
-  if (file.openMode())
-    file.close();
-  if (pdfFile.openMode())
-    pdfFile.close();
-  if (tempFile.openMode())
-    tempFile.close();
-  if (tempFile.exists())
-    tempFile.remove();
-#else
-  message = tr("PDF export was not compiled.");
-#endif
-  if (!message.isEmpty())
-    {
-      curStatus = DDJVU_JOB_FAILED;
-      error(message, __FILE__, __LINE__);
-    }
+  closeFile();
+  delete settingsPage;
 }
 
 
-bool 
-QDjViewPdfExporter::save(QString fname)
+void
+QDjViewPdfTextExporter::resetProperties()
 {
-  if (file.openMode() || tempFile.openMode() || pdfFile.openMode())
+  ui.dpiSpinBox->setValue(300);
+  ui.jpegQualitySpinBox->setValue(75);
+  ui.textLayerCheckBox->setChecked(true);
+}
+
+
+void
+QDjViewPdfTextExporter::loadProperties(QString group)
+{
+  QSettings s;
+  if (group.isEmpty()) group = "Export-" + name();
+  s.beginGroup(group);
+  ui.dpiSpinBox->setValue(s.value("dpi", 300).toInt());
+  ui.jpegQualitySpinBox->setValue(s.value("jpegQuality", 75).toInt());
+  ui.textLayerCheckBox->setChecked(s.value("textLayer", true).toBool());
+}
+
+
+void
+QDjViewPdfTextExporter::saveProperties(QString group)
+{
+  QSettings s;
+  if (group.isEmpty()) group = "Export-" + name();
+  s.beginGroup(group);
+  s.setValue("dpi", ui.dpiSpinBox->value());
+  s.setValue("jpegQuality", ui.jpegQualitySpinBox->value());
+  s.setValue("textLayer", ui.textLayerCheckBox->isChecked());
+}
+
+
+int
+QDjViewPdfTextExporter::propertyPages()
+{
+  return 1;
+}
+
+
+QWidget*
+QDjViewPdfTextExporter::propertyPage(int num)
+{
+  return (num == 0) ? settingsPage : nullptr;
+}
+
+
+void
+QDjViewPdfTextExporter::closeFile()
+{
+  if (painter) {
+    if (painter->isActive())
+      painter->end();
+    delete painter;
+    painter = nullptr;
+  }
+  delete pdfWriter;
+  pdfWriter = nullptr;
+  // On failure, remove the partial output file.
+  if (curStatus > DDJVU_JOB_OK && !outFileName.isEmpty())
+    QFile::remove(outFileName);
+}
+
+
+bool
+QDjViewPdfTextExporter::save(QString fname)
+{
+  if (pdfWriter)        // already running
     return false;
-  pdfFile.setFileName(fname);
-  tempFile.setFileTemplate(fname);
-  if (tempFile.open())
-    {
-      file.setFileName(tempFile.fileName());
-      tempFile.close();
-      return start();
+  outFileName = fname;
+  firstPage   = true;
+  pdfWriter   = new QPdfWriter(fname);
+  pdfWriter->setCreator(QStringLiteral("DjView4"));
+  const int outputDpi = qBound(72, ui.dpiSpinBox->value(), 1200);
+  pdfWriter->setResolution(outputDpi);
+  pdfWriter->setPageMargins(QMarginsF(0, 0, 0, 0));
+  painter = new QPainter();
+  return start();
+}
+
+
+void
+QDjViewPdfTextExporter::doPage()
+{
+  QDjVuPage     *page     = curPage;
+  QDjVuDocument *document = djview->getDocument();
+  const int pageno = page->pageNo();
+  const int imgdpi = ddjvu_page_get_resolution(*page);
+  const int outDpi = pdfWriter->resolution();
+  const int srcW   = ddjvu_page_get_width(*page);
+  const int srcH   = ddjvu_page_get_height(*page);
+
+  // Physical page size derived from the DjVu page's own DPI.
+  const double mmW = srcW * 25.4 / imgdpi;
+  const double mmH = srcH * 25.4 / imgdpi;
+
+  // Painter coordinates are at outDpi dots/inch.
+  // Full-page painter rect: outDpi px per inch × physical size.
+  const int pageW = (srcW * outDpi + imgdpi / 2) / imgdpi;
+  const int pageH = (srcH * outDpi + imgdpi / 2) / imgdpi;
+
+  // Render the DjVu page at min(imgdpi, outDpi) to avoid upscaling.
+  const int renderDpi = qMin(imgdpi, outDpi);
+  const int renderW   = (srcW * renderDpi + imgdpi / 2) / imgdpi;
+  const int renderH   = (srcH * renderDpi + imgdpi / 2) / imgdpi;
+
+  // Set physical page size BEFORE begin() / newPage().
+  pdfWriter->setPageSize(QPageSize(QSizeF(mmW, mmH), QPageSize::Millimeter));
+  pdfWriter->setPageMargins(QMarginsF(0, 0, 0, 0));
+
+  // Start painter on first page; advance on subsequent pages.
+  if (firstPage) {
+    if (!painter->begin(pdfWriter)) {
+      error(tr("Cannot open PDF output file."), __FILE__, __LINE__);
+      return;
     }
-  // prepare error message
-  QString message = tr("Unable to create temporary file.");
-  if (! tempFile.errorString().isEmpty())
-    message = tr("System error: %1.").arg(tempFile.errorString());
-  error(message, __FILE__, __LINE__);
-  return false;
+    firstPage = false;
+  } else {
+    pdfWriter->newPage();
+  }
+
+  // Render DjVu page to an RGB888 QImage.
+  ddjvu_render_mode_t renderMode = DDJVU_RENDER_COLOR;
+  {
+    QDjVuWidget::DisplayMode dm = djview->getDjVuWidget()->displayMode();
+    if      (dm == QDjVuWidget::DISPLAY_STENCIL) renderMode = DDJVU_RENDER_BLACK;
+    else if (dm == QDjVuWidget::DISPLAY_BG)      renderMode = DDJVU_RENDER_BACKGROUND;
+    else if (dm == QDjVuWidget::DISPLAY_FG)      renderMode = DDJVU_RENDER_FOREGROUND;
+  }
+  ddjvu_rect_t rect;
+  rect.x = rect.y = 0;
+  rect.w = (unsigned)renderW;
+  rect.h = (unsigned)renderH;
+  ddjvu_format_t *fmt = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+  ddjvu_format_set_row_order(fmt, 1);  // top-to-bottom
+  ddjvu_format_set_gamma(fmt, 2.2);
+  const int rowBytes = renderW * 3;
+  QByteArray imgBuf(rowBytes * renderH, '\xff');
+  if (!ddjvu_page_render(*page, renderMode, &rect, &rect, fmt,
+                         rowBytes, imgBuf.data()))
+    memset(imgBuf.data(), 0xff, imgBuf.size());  // white fallback
+  ddjvu_format_release(fmt);
+
+  // Convert to QImage (copies data so imgBuf can be freed).
+  QImage qimg(
+    reinterpret_cast<const uchar *>(imgBuf.constData()),
+    renderW, renderH, rowBytes, QImage::Format_RGB888);
+  qimg = qimg.copy();
+
+  // ---- 1. Draw the raster image, scaled to fill the physical page --------
+  // QPainter scales qimg from renderW×renderH to pageW×pageH automatically.
+  painter->drawImage(QRect(0, 0, pageW, pageH), qimg);
+
+  // ---- 2. Invisible text overlay (searchable PDF) -----------------------
+  if (ui.textLayerCheckBox->isChecked() && document) {
+    miniexp_t textExpr = document->getPageText(pageno);
+    if (textExpr != miniexp_dummy && textExpr != miniexp_nil) {
+      QVector<PdfWordZone> words;
+      pdfCollectWords(textExpr, words);
+      if (!words.isEmpty()) {
+        //
+        // DjVu text coords: imgdpi, bottom-left origin, y increases upward.
+        // QPainter coords:  outDpi, top-left origin,    y increases downward.
+        //
+        //   painterX       = djvuX * (outDpi / imgdpi)
+        //   painterY (top) = pageH - djvuY2 * (outDpi / imgdpi)  (y2 = top in DjVu)
+        //
+        const double scale = static_cast<double>(outDpi) / imgdpi;
+        painter->save();
+        painter->setOpacity(0.0);  // invisible; text remains in stream for search/copy
+        QFont font = painter->font();
+        for (const PdfWordZone &w : words) {
+          if (w.text.isEmpty()) continue;
+          // djvuRect.left()   = x1 (DjVu left)
+          // djvuRect.top()    = y1 (DjVu bottom — QRect uses top-left convention,
+          //                         but DjVu coords are passed as-is)
+          // djvuRect.width()  = x2 - x1
+          // djvuRect.height() = y2 - y1
+          const double left    = w.djvuRect.left()                               * scale;
+          const double right   = (w.djvuRect.left()  + w.djvuRect.width())      * scale;
+          const double djvuTop = w.djvuRect.top() + w.djvuRect.height();  // y2 (DjVu top)
+          const double djvuBot = w.djvuRect.top();                         // y1 (DjVu bottom)
+          const double ptop    = pageH - djvuTop * scale;   // painter y of word top
+          const double pbot    = pageH - djvuBot * scale;   // painter y of word bottom
+          const double wZone   = right - left;
+          const double hZone   = pbot  - ptop;
+          if (wZone <= 0 || hZone <= 0) continue;
+          font.setPixelSize(qMax(1, static_cast<int>(hZone)));
+          painter->setFont(font);
+          QFontMetricsF fm(font, pdfWriter);
+          const double textW = fm.horizontalAdvance(w.text);
+          if (textW <= 0) continue;
+          painter->save();
+          painter->translate(left, ptop);
+          // Scale horizontally so the text word exactly fills the zone width.
+          painter->scale(wZone / textW, 1.0);
+          // Draw at approximate baseline (~85 % of zone height from top).
+          painter->drawText(QPointF(0, hZone * 0.85), w.text);
+          painter->restore();
+        }
+        painter->restore();  // restore opacity=1
+      }
+    }
+  }
 }
 
 
@@ -2329,9 +2525,7 @@ static void
 createExporterData()
 {
   QDjViewDjVuExporter::setup();
-#if HAVE_TIFF2PDF
-  QDjViewPdfExporter::setup();
-#endif
+  QDjViewPdfTextExporter::setup();   // always available – no TIFF required
 #if HAVE_TIFF
   QDjViewTiffExporter::setup();
 #endif
