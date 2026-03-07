@@ -2277,15 +2277,33 @@ QDjViewPdfTextExporter::doPage()
   if (!renderOk) qimg.fill(Qt::white);
 
   // NOW type is known (decode completed during render).
-  // Convert bitonal/stencil pages to grayscale — JPEG with 1 channel
-  // is ~3x smaller than RGB for B&W scanned pages.
-  const bool useGray =
-      (ddjvu_page_get_type(*page) == DDJVU_PAGETYPE_BITONAL)
-      || (renderMode == DDJVU_RENDER_BLACK);
+  // Convert to grayscale if:
+  //   a) page is explicitly BITONAL — never has color, or
+  //   b) stencil/black render mode, or
+  //   c) rendered image has no significant chroma (compound pages that
+  //      have only a Sjbz stencil with no IW44 color background also
+  //      render as pure B&W even though type=COMPOUND).
+  // Quick chroma check: sample every Nth pixel; if no pixel has
+  // max(|R-G|,|G-B|,|R-B|) > 16, treat as grayscale.
+  bool useGray = (ddjvu_page_get_type(*page) == DDJVU_PAGETYPE_BITONAL)
+              || (renderMode == DDJVU_RENDER_BLACK);
+  if (!useGray && qimg.format() == QImage::Format_RGB888) {
+    const uchar *bits = qimg.constBits();
+    const int   total = renderW * renderH;
+    const int   step  = qMax(1, total / 2000); // sample ~2000 pixels
+    bool hasColor = false;
+    for (int px = 0; px < total && !hasColor; px += step) {
+      const uchar *p = bits + px * 3;
+      int diff = qMax(qAbs((int)p[0]-(int)p[1]),
+                       qMax(qAbs((int)p[1]-(int)p[2]),
+                            qAbs((int)p[0]-(int)p[2])));
+      if (diff > 16) hasColor = true;
+    }
+    useGray = !hasColor;
+  }
   if (useGray) {
     QImage gray = qimg.convertToFormat(QImage::Format_Grayscale8);
     if (!gray.isNull()) qimg = std::move(gray);
-    // if conversion failed (shouldn't happen), keep RGB — still works
   }
 
   const int pageType = (int)ddjvu_page_get_type(*page);
