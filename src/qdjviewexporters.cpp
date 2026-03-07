@@ -2441,6 +2441,28 @@ QDjViewPdfTextExporter::doPage()
     }
     useGray = !hasColor;
   }
+
+  // For compound B&W pages rendered in COLOR mode: re-render with
+  // RENDER_BLACK at native DPI to get the pure JB2 stencil layer.
+  // RENDER_BLACK has no anti-aliasing → safe for JBIG2 threshold.
+  // This mirrors what DjVuToy does (encode stencil separately).
+  bool forceJbig2 = isBitonalEarly;   // BITONAL already handled above
+  if (useGray && !isBitonalEarly && renderMode == DDJVU_RENDER_COLOR) {
+    ddjvu_rect_t brect; brect.x = brect.y = 0;
+    brect.w = (unsigned)srcW;
+    brect.h = (unsigned)srcH;
+    ddjvu_format_t *fmtB = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+    ddjvu_format_set_row_order(fmtB, 1);
+    QImage bimg(srcW, srcH, QImage::Format_RGB888);
+    bimg.fill(Qt::white);
+    if (ddjvu_page_render(*page, DDJVU_RENDER_BLACK, &brect, &brect, fmtB,
+                          bimg.bytesPerLine(), reinterpret_cast<char *>(bimg.bits()))) {
+      qimg = std::move(bimg);
+      forceJbig2 = true;
+    }
+    ddjvu_format_release(fmtB);
+  }
+
   if (useGray) {
     QImage gray = qimg.convertToFormat(QImage::Format_Grayscale8);
     if (!gray.isNull()) qimg = std::move(gray);
@@ -2460,6 +2482,7 @@ QDjViewPdfTextExporter::doPage()
       + " type=" + QByteArray::number(pageType)
       + " gray=" + QByteArray(useGray ? "1" : "0")
       + " bitonal=" + QByteArray(isBitonal ? "1" : "0")
+      + " jbig2=" + QByteArray(forceJbig2 ? "1" : "0")
       + " renderOk=" + (renderOk ? "1" : "0")
       + "\n";
     logFile_.write(line);
@@ -2475,17 +2498,16 @@ QDjViewPdfTextExporter::doPage()
   }
 
   // Encode the page image.
-  // BITONAL pages: JBIG2 (lossless 1bpp — no anti-aliasing, safe to threshold).
-  // Grayscale compound pages: grayscale JPEG (anti-aliased render — JBIG2
-  //   binarization would destroy soft edges).
+  // BITONAL + B&W compound (RENDER_BLACK stencil): JBIG2 — pure 1bpp, no anti-aliasing.
+  // Grayscale compound with color bg: gray JPEG.
   // Color pages: RGB JPEG.
   const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
   const bool isGrayImg = (qimg.format() == QImage::Format_Grayscale8);
   QByteArray imgData;
   bool isJbig2 = false;
 
-  if (isGrayImg && isBitonal) {
-    // Truly 1bpp page — JBIG2 is safe and gives best compression.
+  if (isGrayImg && forceJbig2) {
+    // Stencil render — JBIG2 is safe and gives best compression.
     imgData = encodeJbig2Generic(qimg);
     if (!imgData.isEmpty()) {
       isJbig2 = true;
