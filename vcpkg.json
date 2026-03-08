@@ -1,10 +1,11 @@
 {
   "name": "djview4",
-  "version": "4.14.0",
+  "version": "4.16.0",
   "description": "DjView4 – DjVu document viewer",
   "dependencies": [
     "qtbase",
     "qttools",
+    "qtimageformats",
     "leptonica"
   ]
 }

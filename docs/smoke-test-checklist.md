@@ -8,7 +8,7 @@ Use this checklist after dependency updates, renderer changes, or CI/build scrip
 - App starts with existing user settings (no regressions in startup behavior).
 - "About" dialog opens and shows expected app/library build info.
   - DjVuLibre version matches the bundled `libdjvulibre.dll` (currently `3.5.30`).
-  - DjView version matches the release tag (currently `4.14`).
+  - DjView version matches the release tag (currently `4.16`).
 
 ## 2. Document Open
 

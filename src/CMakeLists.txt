@@ -167,6 +167,13 @@ if(DJVIEW_DJVU_SOURCE_DIR)
 endif()
 
 # ---------------------------------------------------------------------------
+# libtiff – multi-page TIFF export with G4/JPEG/Deflate compression.
+# ---------------------------------------------------------------------------
+find_package(TIFF REQUIRED)
+target_link_libraries(djview PRIVATE TIFF::TIFF)
+target_compile_definitions(djview PRIVATE HAVE_TIFF=1)
+
+# ---------------------------------------------------------------------------
 # libjpeg-turbo (direct grayscale JPEG encoding bypassing Qt plugin)
 # ---------------------------------------------------------------------------
 find_package(JPEG REQUIRED)
@@ -271,6 +278,26 @@ if(WIN32)
                 "$<TARGET_FILE_DIR:djview>/jpeg62.dll"
             COMMENT "Deploying jpeg62.dll ($<CONFIG>)"
         )
+
+        # qwebp loads extra WebP codec DLLs at runtime; copy them explicitly
+        # because they are plugin dependencies, not direct djview dependencies.
+        add_custom_command(TARGET djview POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "$<IF:$<CONFIG:Debug>,${_vcpkg_root}/debug/bin,${_vcpkg_root}/bin>/libwebpdecoder.dll"
+                "$<IF:$<CONFIG:Debug>,${_vcpkg_root}/debug/bin,${_vcpkg_root}/bin>/libwebpdemux.dll"
+                "$<TARGET_FILE_DIR:djview>"
+            COMMENT "Deploying WebP plugin runtime DLLs ($<CONFIG>)"
+        )
+
+        # Download qavif6.dll after building djview (Windows only)
+        if(WIN32)
+            add_custom_command(TARGET djview POST_BUILD
+                COMMAND "${CMAKE_COMMAND}"
+                    -DTARGET_DIR="$<TARGET_FILE_DIR:djview>/imageformats"
+                    -P "${CMAKE_SOURCE_DIR}/cmake/GetAvifPlugin.cmake"
+                COMMENT "Downloading qavif6.dll (AVIF plugin)"
+            )
+        endif()
 
         unset(_vcpkg_root)
         unset(_qt_plugins_rel)

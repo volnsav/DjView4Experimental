@@ -1,5 +1,14 @@
+NEW IN VERSION 4.16.0 (internal)
+--------------------------------
+- Export formats reorganization and unification:
+  - Unified DPI selection logic for PDF, TIFF, and Image export: common presets, custom value support, and consistent dialog appearance.
+  - Added support for new image export formats: WebP, AVIF (if libraries are available).
+  - Removed obsolete or duplicate formats; only current formats remain: PNG, JPEG, WebP, AVIF.
+  - All exporters now share the same set of options for DPI, quality, and additional parameters.
+- Improved file opening reliability for export (especially TIFF on Windows).
+- Export dialogs are now simpler and more user-friendly.
 
-NEW IN VERSION 4.14 (internal)
+NEW IN VERSION 4.15.0 (internal)
 ------------------------------
 - PDF export with JBIG2 compression and dual-mask fill zones
 - Invisible text layer in exported PDF (searchable, copy-paste)
@@ -10,12 +19,17 @@ NEW IN VERSION 4.14 (internal)
   force grayscale, JBIG2 similarity threshold, text layer toggle
 - jbig2enc via FetchContent, Leptonica via vcpkg
 
+NEW IN VERSION 4.14 (internal)
+------------------------------
+- Tabbed document mode and multi-tab viewing workflow
+- Improved logic for main/secondary document windows
+- Better behavior around opening documents in working windows
+
 
 NEW IN VERSION 4.13 (internal)
 ------------------------------
 - Migrate build system from qmake/autotools to CMake 3.21+
 - Migrate to Qt6 (drop Qt4/Qt5 support)
-- Tabbed document window
 - Dark-theme rendering fixes
 - OpenGL renderer restored (Qt6 OpenGLWidgets)
 - Drop NPAPI browser plugin (npdjvu, nsdejavu)
@@ -141,5 +155,3 @@ NEW IN VERSION 4.1
 NEW IN VERSION 4.0
 ------------------
 - Initial release
-
-

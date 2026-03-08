@@ -1,11 +1,28 @@
-djview4 (4.14-1) experimental; urgency=medium
+djview4 (4.16-1) experimental; urgency=medium
 
-  * Version 4.14
+  * Version 4.16
+  * Export formats reorganization and unified export DPI handling
+  * TIFF export file opening fixes on Windows
+  * AVIF deployment via CMake helper script
+
+ -- Volodymyr Savchenko <volnsav@github>  Sat, 08 Mar 2026 18:00:00 +0200
+
+djview4 (4.15-1) experimental; urgency=medium
+
+  * Version 4.15
   * PDF export with JBIG2 compression, text layer, dual-mask fills
   * Settings: DPI presets, BG downscale, force grayscale, JBIG2 threshold
   * jbig2enc via FetchContent, Leptonica via vcpkg
 
  -- Volodymyr Savchenko <volnsav@github>  Sat, 08 Mar 2026 12:00:00 +0200
+
+djview4 (4.14-1) experimental; urgency=medium
+
+  * Version 4.14
+  * Tabbed document mode and multi-tab viewing
+  * Improved document window/workflow logic
+
+ -- Volodymyr Savchenko <volnsav@github>  Sat, 07 Mar 2026 12:00:00 +0200
 
 djview4 (4.13-1) experimental; urgency=medium
 
