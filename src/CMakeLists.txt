@@ -265,12 +265,6 @@ foreach(_jbig2enc_candidate IN LISTS _jbig2enc_local_candidates)
 endforeach()
 
 if(_jbig2enc_local_source)
-    set(_jbig2enc_cmakelists "${_jbig2enc_local_source}/CMakeLists.txt")
-    file(READ "${_jbig2enc_cmakelists}" _jbig2enc_cmake_text)
-    if(_jbig2enc_cmake_text MATCHES " -noalign")
-        string(REPLACE " -noalign" "" _jbig2enc_cmake_text "${_jbig2enc_cmake_text}")
-        file(WRITE "${_jbig2enc_cmakelists}" "${_jbig2enc_cmake_text}")
-    endif()
     FetchContent_Declare(jbig2enc
         SOURCE_DIR "${_jbig2enc_local_source}"
     )
@@ -281,7 +275,19 @@ else()
         GIT_SHALLOW    TRUE
     )
 endif()
-FetchContent_MakeAvailable(jbig2enc)
+FetchContent_GetProperties(jbig2enc)
+if(NOT jbig2enc_POPULATED)
+    FetchContent_Populate(jbig2enc)
+endif()
+
+set(_jbig2enc_cmakelists "${jbig2enc_SOURCE_DIR}/CMakeLists.txt")
+file(READ "${_jbig2enc_cmakelists}" _jbig2enc_cmake_text)
+if(_jbig2enc_cmake_text MATCHES " -noalign")
+    string(REPLACE " -noalign" "" _jbig2enc_cmake_text "${_jbig2enc_cmake_text}")
+    file(WRITE "${_jbig2enc_cmakelists}" "${_jbig2enc_cmake_text}")
+endif()
+
+add_subdirectory("${jbig2enc_SOURCE_DIR}" "${jbig2enc_BINARY_DIR}")
 if(TARGET Leptonica::Leptonica)
     target_link_libraries(djview PRIVATE libjbig2enc Leptonica::Leptonica)
 elseif(TARGET leptonica)
