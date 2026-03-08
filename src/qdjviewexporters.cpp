@@ -3406,10 +3406,14 @@ QDjViewImgExporter::create(QDialog *parent, QDjView *djview, QString name)
 void
 QDjViewImgExporter::setup()
 {
+  // Only expose modern, widely-used image formats
+  static const QSet<QByteArray> whitelist = {"png", "jpg", "webp", "avif"};
   QByteArray format;
   QList<QByteArray> formats = QImageWriter::supportedImageFormats();
   foreach(format, formats)
     {
+      if (!whitelist.contains(format.toLower()))
+        continue;
       QString name = QString::fromLocal8Bit(format);
       QString uname = name.toUpper();
       QString suffix = name.toLower();
