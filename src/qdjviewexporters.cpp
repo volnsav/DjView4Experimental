@@ -62,10 +62,12 @@
 #include <cstdarg>
 #include <cstdio>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDebug>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QDir>
 #include <QDialog>
 #include <QFile>
@@ -130,6 +132,74 @@ systemErrorString(int err)
 #else
   return QString::fromLocal8Bit(::strerror(err));
 #endif
+}
+
+static const int kExportDpiPresets[] = {72, 150, 300, 600, 1200};
+static const int kExportDefaultDpi = 300;
+static const int kExportMinCustomDpi = 50;
+static const int kExportMaxCustomDpi = 1200;
+static const int kExportMaxEffectiveDpi = kExportMaxCustomDpi;
+
+static int
+exportDpiPresetIndex(int dpi)
+{
+  for (int i = 0; i < (int)(sizeof(kExportDpiPresets) / sizeof(kExportDpiPresets[0])); ++i)
+    if (kExportDpiPresets[i] == dpi)
+      return i;
+  return -1;
+}
+
+static int
+exportDpiFromCombo(QComboBox *combo)
+{
+  int idx = combo->currentIndex();
+  if (idx >= 0
+      && idx < (int)(sizeof(kExportDpiPresets) / sizeof(kExportDpiPresets[0])))
+    return kExportDpiPresets[idx];
+  QString text = combo->currentText().trimmed();
+  text.remove(" dpi", Qt::CaseInsensitive);
+  bool ok = false;
+  int dpi = text.toInt(&ok);
+  if (!ok || dpi < kExportMinCustomDpi || dpi > kExportMaxCustomDpi)
+    dpi = kExportDefaultDpi;
+  return dpi;
+}
+
+static void
+exportDpiToCombo(QComboBox *combo, int dpi)
+{
+  int idx = exportDpiPresetIndex(dpi);
+  if (idx >= 0)
+    {
+      combo->setCurrentIndex(idx);
+      combo->setEditText(combo->itemText(idx));
+    }
+  else
+    {
+      combo->setCurrentIndex(combo->count() - 1);
+      combo->setEditText(QString::number(dpi));
+    }
+}
+
+static void
+exportPrepareDpiCombo(QComboBox *combo)
+{
+  if (combo->lineEdit())
+    combo->lineEdit()->setPlaceholderText(QObject::tr("Custom"));
+  QObject::connect(combo, QOverload<int>::of(&QComboBox::activated), combo,
+                   [combo](int idx)
+                   {
+                     if (idx == combo->count() - 1)
+                       {
+                         combo->clearEditText();
+                         if (combo->lineEdit())
+                           combo->lineEdit()->setPlaceholderText(QObject::tr("Custom"));
+                       }
+                     else if (idx >= 0)
+                       {
+                         combo->setEditText(combo->itemText(idx));
+                       }
+                   });
 }
 
 #ifdef Q_OS_WIN
@@ -1376,6 +1446,7 @@ protected:
   Ui::QDjViewExportTiff ui;
   QPointer<QWidget> page;
   QFile file;
+  int tiffFd;
 #if HAVE_TIFF
   TIFF *tiff;
 #else
@@ -1397,7 +1468,7 @@ void
 QDjViewTiffExporter::setup()
 {
   addExporterData("TIFF", "tiff",
-                  tr("TIFF Document"),
+                  tr("TIFF image"),
                   tr("TIFF Files (*.tiff *.tif)"),
                   QDjViewTiffExporter::create);
 }
@@ -1413,10 +1484,12 @@ QDjViewTiffExporter::~QDjViewTiffExporter()
 QDjViewTiffExporter::QDjViewTiffExporter(QDialog *parent, QDjView *djview,
                                          QString name)
   : QDjViewPageExporter(parent, djview, name), 
+    tiffFd(-1),
     tiff(0)
 {
   page = new QWidget();
   ui.setupUi(page);
+  exportPrepareDpiCombo(ui.dpiComboBox);
   page->setObjectName(tr("TIFF Options", "tab caption"));
   resetProperties();
   page->setWhatsThis(tr("<html><b>TIFF options.</b><br>"
@@ -1460,7 +1533,7 @@ QDjViewTiffExporter::checkTiffSupport()
 void     
 QDjViewTiffExporter::resetProperties()
 {
-  ui.dpiSpinBox->setValue(600);
+  exportDpiToCombo(ui.dpiComboBox, kExportDefaultDpi);
   ui.bitonalCheckBox->setChecked(false);
   ui.jpegCheckBox->setChecked(true);
   ui.jpegSpinBox->setValue(75);
@@ -1476,7 +1549,7 @@ QDjViewTiffExporter::loadProperties(QString group)
   if (group.isEmpty()) 
     group = "Export-" + name();
   s.beginGroup(group);
-  ui.dpiSpinBox->setValue(s.value("dpi", 600).toInt());
+  exportDpiToCombo(ui.dpiComboBox, s.value("dpi", kExportDefaultDpi).toInt());
   ui.bitonalCheckBox->setChecked(s.value("bitonal", false).toBool());
   ui.jpegCheckBox->setChecked(s.value("jpeg", true).toBool());
   ui.jpegSpinBox->setValue(s.value("jpegQuality", 75).toInt());
@@ -1492,7 +1565,7 @@ QDjViewTiffExporter::saveProperties(QString group)
   if (group.isEmpty()) 
     group = "Export-" + name();
   s.beginGroup(group);
-  s.setValue("dpi", ui.dpiSpinBox->value());
+  s.setValue("dpi", exportDpiFromCombo(ui.dpiComboBox));
   s.setValue("bitonal", ui.bitonalCheckBox->isChecked());
   s.setValue("jpeg", ui.jpegCheckBox->isChecked());
   s.setValue("jpegQuality", ui.jpegSpinBox->value());
@@ -1546,11 +1619,14 @@ QDjViewTiffExporter::closeFile()
     TIFFClose(tiff);
 #endif
   tiff = 0;
-  QIODevice::OpenMode mode = file.openMode();
+  if (tiffFd >= 0)
+    djv_close(tiffFd);
+  tiffFd = -1;
+  QString outputFileName = file.fileName();
   file.close();
   if (curStatus > DDJVU_JOB_OK)
-    if (mode & (QIODevice::WriteOnly|QIODevice::Append))
-      file.remove();
+    if (!outputFileName.isEmpty())
+      QFile::remove(outputFileName);
 }
 
 
@@ -1578,16 +1654,40 @@ QDjViewTiffExporter::doPage()
   // open file or write directory
   if (tiff)
     TIFFWriteDirectory(tiff);
-  else if (file.open(QIODevice::ReadWrite))
-    tiff = TIFFFdOpen(wdup(file.handle()), file.fileName().toLocal8Bit().data(),"w");
+  else
+    {
+#ifdef WIN32
+      tiff = TIFFOpenW((const wchar_t*)file.fileName().utf16(), "w");
+#else
+      QByteArray encodedName = QFile::encodeName(file.fileName());
+      tiffFd = ::open(encodedName.constData(), O_CREAT | O_TRUNC | O_RDWR, 0666);
+      if (tiffFd >= 0)
+        {
+          QByteArray diagnosticName = QFile::encodeName(file.fileName());
+          tiff = TIFFFdOpen(tiffFd, diagnosticName.constData(), "w");
+          if (tiff)
+            tiffFd = -1;
+        }
+#endif
+    }
   if (!tiff)
-    message = tr("Cannot open output file.");
+    {
+      if (tiffFd >= 0)
+        {
+          djv_close(tiffFd);
+          tiffFd = -1;
+        }
+      QString details = systemErrorString(errno);
+      message = tr("Cannot open output file.");
+      if (!details.isEmpty())
+        message += QLatin1Char('\n') + details;
+    }
   else
     {
       // determine rectangle
       ddjvu_rect_t rect;
       int imgdpi = ddjvu_page_get_resolution(*page);
-      int dpi = qMin(imgdpi, ui.dpiSpinBox->value());
+      int dpi = qMin(imgdpi, exportDpiFromCombo(ui.dpiComboBox));
       rect.x = rect.y = 0;
       rect.w = ( ddjvu_page_get_width(*page) * dpi + imgdpi/2 ) / imgdpi;
       rect.h = ( ddjvu_page_get_height(*page) * dpi + imgdpi/2 ) / imgdpi;
@@ -2629,6 +2729,7 @@ QDjViewPdfTextExporter::QDjViewPdfTextExporter(QDialog *parent, QDjView *djview,
 {
   settingsPage = new QWidget();
   ui.setupUi(settingsPage);
+  exportPrepareDpiCombo(ui.dpiComboBox);
   settingsPage->setObjectName(tr("PDF Options", "tab caption"));
   resetProperties();
   settingsPage->setWhatsThis(
@@ -2659,7 +2760,7 @@ QDjViewPdfTextExporter::~QDjViewPdfTextExporter()
 void
 QDjViewPdfTextExporter::resetProperties()
 {
-  ui.dpiComboBox->setCurrentIndex(4);  // 300 dpi
+  exportDpiToCombo(ui.dpiComboBox, kExportDefaultDpi);
   ui.jpegQualitySpinBox->setValue(75);
   ui.bgScaleSpinBox->setValue(3);
   ui.forceGrayscaleCheckBox->setChecked(false);
@@ -2674,11 +2775,7 @@ QDjViewPdfTextExporter::loadProperties(QString group)
   QSettings s;
   if (group.isEmpty()) group = "Export-" + name();
   s.beginGroup(group);
-  {
-    const int dpi = s.value("dpi", 300).toInt();
-    int idx = ui.dpiComboBox->findText(QString::number(dpi) + " dpi");
-    ui.dpiComboBox->setCurrentIndex(idx >= 0 ? idx : 4);
-  }
+  exportDpiToCombo(ui.dpiComboBox, s.value("dpi", kExportDefaultDpi).toInt());
   ui.jpegQualitySpinBox->setValue(s.value("jpegQuality", 75).toInt());
   ui.bgScaleSpinBox->setValue(s.value("bgScale", 3).toInt());
   ui.forceGrayscaleCheckBox->setChecked(s.value("forceGrayscale", false).toBool());
@@ -2693,7 +2790,7 @@ QDjViewPdfTextExporter::saveProperties(QString group)
   QSettings s;
   if (group.isEmpty()) group = "Export-" + name();
   s.beginGroup(group);
-  s.setValue("dpi", ui.dpiComboBox->currentText().split(' ').first().toInt());
+  s.setValue("dpi", exportDpiFromCombo(ui.dpiComboBox));
   s.setValue("jpegQuality", ui.jpegQualitySpinBox->value());
   s.setValue("bgScale", ui.bgScaleSpinBox->value());
   s.setValue("forceGrayscale", ui.forceGrayscaleCheckBox->isChecked());
@@ -2753,7 +2850,9 @@ QDjViewPdfTextExporter::save(QString fname)
   (void)logFile_.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text);
   if (logFile_.isOpen())
     logFile_.write(QByteArray("PDF export log: ") + fname.toUtf8() + "\n"
-                   "dpi=" + QByteArray::number(ui.dpiComboBox->currentText().split(' ').first().toInt())
+                   "dpi=" + QByteArray::number([&]{
+                     return exportDpiFromCombo(ui.dpiComboBox);
+                   }())
                    + " jpegQ=" + QByteArray::number(jpegQ)
                    + " bgScale=" + QByteArray::number(ui.bgScaleSpinBox->value())
                    + " gray=" + QByteArray::number(ui.forceGrayscaleCheckBox->isChecked())
@@ -2784,7 +2883,7 @@ QDjViewPdfTextExporter::doPage()
   const double mmH = srcH * 25.4 / imgdpi;
 
   // Render at min(imgdpi, outDpi) to avoid unnecessary upscaling.
-  const int outDpi    = qBound(72, ui.dpiComboBox->currentText().split(' ').first().toInt(), 1200);
+  int outDpi = qBound(72, exportDpiFromCombo(ui.dpiComboBox), kExportMaxEffectiveDpi);
   const int renderDpi = qMin(imgdpi, outDpi);
   const int renderW   = qMax(1, (srcW * renderDpi + imgdpi / 2) / imgdpi);
   const int renderH   = qMax(1, (srcH * renderDpi + imgdpi / 2) / imgdpi);
@@ -3447,11 +3546,11 @@ QDjViewImgExporter::QDjViewImgExporter(QDialog *parent, QDjView *djview,
   // Resolution
   QGroupBox *resGroup = new QGroupBox(tr("Resolution"));
   QHBoxLayout *resLayout = new QHBoxLayout(resGroup);
-  resLayout->addWidget(new QLabel(tr("Image resolution ")));
+  resLayout->addWidget(new QLabel(tr("Maximum image resolution ")));
   dpiSpinBox = new QSpinBox();
-  dpiSpinBox->setRange(72, 2400);
-  dpiSpinBox->setSuffix(tr(" dpi"));
+  dpiSpinBox->setRange(72, kExportMaxCustomDpi);
   resLayout->addWidget(dpiSpinBox);
+  resLayout->addWidget(new QLabel(tr("dpi")));
   resLayout->addStretch();
   // Quality (lossy formats only)
   qualityGroup = new QGroupBox(tr("Quality"));
@@ -3488,7 +3587,7 @@ QDjViewImgExporter::exportOnePageOnly()
 void
 QDjViewImgExporter::resetProperties()
 {
-  dpiSpinBox->setValue(300);
+  dpiSpinBox->setValue(kExportDefaultDpi);
   qualitySpinBox->setValue(85);
 }
 
@@ -3500,7 +3599,8 @@ QDjViewImgExporter::loadProperties(QString group)
   if (group.isEmpty())
     group = "Export-" + name();
   s.beginGroup(group);
-  dpiSpinBox->setValue(s.value("dpi", 300).toInt());
+  dpiSpinBox->setValue(qBound(72, s.value("dpi", kExportDefaultDpi).toInt(),
+                              kExportMaxCustomDpi));
   qualitySpinBox->setValue(s.value("quality", 85).toInt());
 }
 
@@ -3512,7 +3612,7 @@ QDjViewImgExporter::saveProperties(QString group)
   if (group.isEmpty())
     group = "Export-" + name();
   s.beginGroup(group);
-  s.setValue("dpi", dpiSpinBox->value());
+  s.setValue("dpi", qBound(72, dpiSpinBox->value(), kExportMaxCustomDpi));
   s.setValue("quality", qualitySpinBox->value());
 }
 
@@ -3548,7 +3648,7 @@ QDjViewImgExporter::doPage()
   // determine rectangle
   ddjvu_rect_t rect;
   int imgdpi = ddjvu_page_get_resolution(*p);
-  int dpi = dpiSpinBox->value();
+  int dpi = qMin(imgdpi, qBound(72, dpiSpinBox->value(), kExportMaxCustomDpi));
   rect.x = rect.y = 0;
   rect.w = ( ddjvu_page_get_width(*p) * dpi + imgdpi/2 ) / imgdpi;
   rect.h = ( ddjvu_page_get_height(*p) * dpi + imgdpi/2 ) / imgdpi;

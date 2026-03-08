@@ -5,7 +5,7 @@
   "dependencies": [
     "qtbase",
     "qttools",
-    "leptonica",
-    "tiff"
+    "qtimageformats",
+    "leptonica"
   ]
 }

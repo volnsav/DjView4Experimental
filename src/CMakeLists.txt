@@ -279,6 +279,26 @@ if(WIN32)
             COMMENT "Deploying jpeg62.dll ($<CONFIG>)"
         )
 
+        # qwebp loads extra WebP codec DLLs at runtime; copy them explicitly
+        # because they are plugin dependencies, not direct djview dependencies.
+        add_custom_command(TARGET djview POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                "$<IF:$<CONFIG:Debug>,${_vcpkg_root}/debug/bin,${_vcpkg_root}/bin>/libwebpdecoder.dll"
+                "$<IF:$<CONFIG:Debug>,${_vcpkg_root}/debug/bin,${_vcpkg_root}/bin>/libwebpdemux.dll"
+                "$<TARGET_FILE_DIR:djview>"
+            COMMENT "Deploying WebP plugin runtime DLLs ($<CONFIG>)"
+        )
+
+        # Download qavif6.dll after building djview (Windows only)
+        if(WIN32)
+            add_custom_command(TARGET djview POST_BUILD
+                COMMAND "${CMAKE_COMMAND}"
+                    -DTARGET_DIR="$<TARGET_FILE_DIR:djview>/imageformats"
+                    -P "${CMAKE_SOURCE_DIR}/scripts/get_avif_plugin.cmake"
+                COMMENT "Downloading qavif6.dll (AVIF plugin)"
+            )
+        endif()
+
         unset(_vcpkg_root)
         unset(_qt_plugins_rel)
         unset(_qt_plugins_dbg)
