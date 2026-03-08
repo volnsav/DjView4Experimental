@@ -294,7 +294,7 @@ if(WIN32)
             add_custom_command(TARGET djview POST_BUILD
                 COMMAND "${CMAKE_COMMAND}"
                     -DTARGET_DIR="$<TARGET_FILE_DIR:djview>/imageformats"
-                    -P "${CMAKE_SOURCE_DIR}/scripts/get_avif_plugin.cmake"
+                    -P "${CMAKE_SOURCE_DIR}/cmake/GetAvifPlugin.cmake"
                 COMMENT "Downloading qavif6.dll (AVIF plugin)"
             )
         endif()
