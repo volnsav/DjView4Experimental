@@ -167,6 +167,13 @@ if(DJVIEW_DJVU_SOURCE_DIR)
 endif()
 
 # ---------------------------------------------------------------------------
+# libtiff – multi-page TIFF export with G4/JPEG/Deflate compression.
+# ---------------------------------------------------------------------------
+find_package(TIFF REQUIRED)
+target_link_libraries(djview PRIVATE TIFF::TIFF)
+target_compile_definitions(djview PRIVATE HAVE_TIFF=1)
+
+# ---------------------------------------------------------------------------
 # libjpeg-turbo (direct grayscale JPEG encoding bypassing Qt plugin)
 # ---------------------------------------------------------------------------
 find_package(JPEG REQUIRED)

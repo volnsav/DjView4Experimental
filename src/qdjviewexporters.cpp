@@ -63,6 +63,9 @@
 #include <cstdio>
 #include <QCheckBox>
 #include <QDebug>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QDir>
 #include <QDialog>
 #include <QFile>
@@ -3383,11 +3386,20 @@ public:
   QDjViewImgExporter(QDialog *parent, QDjView *djview, 
                      QString name, QByteArray format);
   virtual bool exportOnePageOnly();
+  virtual void resetProperties();
+  virtual void loadProperties(QString group);
+  virtual void saveProperties(QString group);
+  virtual int propertyPages();
+  virtual QWidget* propertyPage(int num);
   virtual bool save(QString fname);
 protected:
   virtual void doPage();
   QString fileName;
   QByteArray format;
+  QPointer<QWidget> page;
+  QSpinBox *dpiSpinBox;
+  QSpinBox *qualitySpinBox;
+  QGroupBox *qualityGroup;
 };
 
 
@@ -3425,11 +3437,44 @@ QDjViewImgExporter::setup()
 }
 
 
-QDjViewImgExporter::QDjViewImgExporter(QDialog *parent, QDjView *djview, 
+QDjViewImgExporter::QDjViewImgExporter(QDialog *parent, QDjView *djview,
                                        QString name, QByteArray format)
-  : QDjViewPageExporter(parent, djview, name), 
+  : QDjViewPageExporter(parent, djview, name),
     format(format)
 {
+  page = new QWidget();
+  page->setObjectName(tr("Image Options", "tab caption"));
+  // Resolution
+  QGroupBox *resGroup = new QGroupBox(tr("Resolution"));
+  QHBoxLayout *resLayout = new QHBoxLayout(resGroup);
+  resLayout->addWidget(new QLabel(tr("Image resolution ")));
+  dpiSpinBox = new QSpinBox();
+  dpiSpinBox->setRange(72, 2400);
+  dpiSpinBox->setSuffix(tr(" dpi"));
+  resLayout->addWidget(dpiSpinBox);
+  resLayout->addStretch();
+  // Quality (lossy formats only)
+  qualityGroup = new QGroupBox(tr("Quality"));
+  QHBoxLayout *qualLayout = new QHBoxLayout(qualityGroup);
+  qualLayout->addWidget(new QLabel(tr("Compression quality ")));
+  qualitySpinBox = new QSpinBox();
+  qualitySpinBox->setRange(1, 100);
+  qualLayout->addWidget(qualitySpinBox);
+  qualLayout->addStretch();
+  bool lossy = (format == "jpg" || format == "webp" || format == "avif");
+  qualityGroup->setVisible(lossy);
+  // Layout
+  QVBoxLayout *mainLayout = new QVBoxLayout(page);
+  mainLayout->addWidget(resGroup);
+  mainLayout->addWidget(qualityGroup);
+  mainLayout->addStretch();
+  page->setWhatsThis(tr("<html><b>Image options.</b><br>"
+    "The resolution box specifies the resolution "
+    "of the exported image in dots per inch. "
+    "The quality setting controls the compression "
+    "quality for lossy formats (JPEG, WebP, AVIF). "
+    "PNG always uses lossless compression.</html>"));
+  resetProperties();
 }
 
 
@@ -3437,6 +3482,54 @@ bool
 QDjViewImgExporter::exportOnePageOnly()
 {
   return true;
+}
+
+
+void
+QDjViewImgExporter::resetProperties()
+{
+  dpiSpinBox->setValue(300);
+  qualitySpinBox->setValue(85);
+}
+
+
+void
+QDjViewImgExporter::loadProperties(QString group)
+{
+  QSettings s;
+  if (group.isEmpty())
+    group = "Export-" + name();
+  s.beginGroup(group);
+  dpiSpinBox->setValue(s.value("dpi", 300).toInt());
+  qualitySpinBox->setValue(s.value("quality", 85).toInt());
+}
+
+
+void
+QDjViewImgExporter::saveProperties(QString group)
+{
+  QSettings s;
+  if (group.isEmpty())
+    group = "Export-" + name();
+  s.beginGroup(group);
+  s.setValue("dpi", dpiSpinBox->value());
+  s.setValue("quality", qualitySpinBox->value());
+}
+
+
+int
+QDjViewImgExporter::propertyPages()
+{
+  return 1;
+}
+
+
+QWidget*
+QDjViewImgExporter::propertyPage(int num)
+{
+  if (num == 0)
+    return page;
+  return 0;
 }
 
 
@@ -3451,14 +3544,14 @@ QDjViewImgExporter::save(QString fname)
 void
 QDjViewImgExporter::doPage()
 {
-  QDjVuPage *page = curPage;
+  QDjVuPage *p = curPage;
   // determine rectangle
   ddjvu_rect_t rect;
-  int imgdpi = ddjvu_page_get_resolution(*page);
-  int dpi = imgdpi; // (TODO: add property page with resolution!)
+  int imgdpi = ddjvu_page_get_resolution(*p);
+  int dpi = dpiSpinBox->value();
   rect.x = rect.y = 0;
-  rect.w = ( ddjvu_page_get_width(*page) * dpi + imgdpi/2 ) / imgdpi;
-  rect.h = ( ddjvu_page_get_height(*page) * dpi + imgdpi/2 ) / imgdpi;
+  rect.w = ( ddjvu_page_get_width(*p) * dpi + imgdpi/2 ) / imgdpi;
+  rect.h = ( ddjvu_page_get_height(*p) * dpi + imgdpi/2 ) / imgdpi;
   // prepare format
   ddjvu_format_t *fmt = 0;
 #if DDJVUAPI_VERSION < 18
@@ -3470,7 +3563,7 @@ QDjViewImgExporter::doPage()
 #endif
   ddjvu_format_set_row_order(fmt, true);
   ddjvu_format_set_gamma(fmt, 2.2);
-  // determine mode (TODO: add property page with mode!)
+  // determine render mode from current display setting
   ddjvu_render_mode_t mode = DDJVU_RENDER_COLOR;
   QDjVuWidget::DisplayMode displayMode;
   displayMode = djview->getDjVuWidget()->displayMode();
@@ -3483,13 +3576,16 @@ QDjViewImgExporter::doPage()
   // compute image
   QString message;
   QImage img(rect.w, rect.h, QImage::Format_RGB32);
-  if (! ddjvu_page_render(*page, mode, &rect, &rect, fmt,
+  if (! ddjvu_page_render(*p, mode, &rect, &rect, fmt,
                           img.bytesPerLine(), (char*)img.bits() ))
     message = tr("Cannot render page.");
   else
     {
       QFile file(fileName);
       QImageWriter writer(&file, format);
+      int q = qualitySpinBox->value();
+      if (format == "jpg" || format == "webp" || format == "avif")
+        writer.setQuality(q);
       if (! writer.write(img))
         {
           message = file.errorString();
