@@ -38,6 +38,28 @@ if(NOT DJVIEW_DJVU_BUILD_DIR)
     endforeach()
 endif()
 
+# qdjviewexporters.cpp depends on internal libdjvu headers that are not part of
+# the system libdjvulibre-dev package. Require both the source tree and the
+# generated config.h up front so "system ddjvuapi only" fails at configure time
+# with a clear message instead of a late compiler error.
+if(NOT DJVIEW_DJVU_SOURCE_DIR OR
+   NOT EXISTS "${DJVIEW_DJVU_SOURCE_DIR}/libdjvu/DjVuImage.h")
+    message(FATAL_ERROR
+        "DjView4 requires DjVuLibre internal libdjvu headers to build.\n"
+        "The system libdjvulibre-dev package only provides public headers.\n"
+        "Set DJVIEW_DJVU_SOURCE_DIR to a DjVuLibreExperimental source tree,\n"
+        "or enable DJVIEW_FETCH_DJVULIBRE=ON.")
+endif()
+
+if(NOT DJVIEW_DJVU_BUILD_DIR OR
+   NOT EXISTS "${DJVIEW_DJVU_BUILD_DIR}/generated/config.h")
+    message(FATAL_ERROR
+        "DjView4 requires DjVuLibre's generated config.h when building against\n"
+        "internal libdjvu headers.\n"
+        "Set DJVIEW_DJVU_BUILD_DIR to a DjVuLibreExperimental build directory\n"
+        "containing generated/config.h.")
+endif()
+
 set(_git_info_out "${CMAKE_CURRENT_BINARY_DIR}/build_git_info.h")
 set(_git_info_script "${CMAKE_SOURCE_DIR}/cmake/GenerateBuildGitInfo.cmake")
 
@@ -229,11 +251,36 @@ target_link_libraries(djview PRIVATE JPEG::JPEG)
 include(FetchContent)
 find_package(Leptonica REQUIRED)
 
-FetchContent_Declare(jbig2enc
-    GIT_REPOSITORY https://github.com/agl/jbig2enc
-    GIT_TAG        master
-    GIT_SHALLOW    TRUE
+set(_jbig2enc_local_candidates
+    "${CMAKE_BINARY_DIR}/_deps/jbig2enc-src"
+    "${CMAKE_SOURCE_DIR}/build/_deps/jbig2enc-src"
+    "${CMAKE_SOURCE_DIR}/build-debug/_deps/jbig2enc-src"
 )
+unset(_jbig2enc_local_source)
+foreach(_jbig2enc_candidate IN LISTS _jbig2enc_local_candidates)
+    if(EXISTS "${_jbig2enc_candidate}/CMakeLists.txt")
+        set(_jbig2enc_local_source "${_jbig2enc_candidate}")
+        break()
+    endif()
+endforeach()
+
+if(_jbig2enc_local_source)
+    set(_jbig2enc_cmakelists "${_jbig2enc_local_source}/CMakeLists.txt")
+    file(READ "${_jbig2enc_cmakelists}" _jbig2enc_cmake_text)
+    if(_jbig2enc_cmake_text MATCHES " -noalign")
+        string(REPLACE " -noalign" "" _jbig2enc_cmake_text "${_jbig2enc_cmake_text}")
+        file(WRITE "${_jbig2enc_cmakelists}" "${_jbig2enc_cmake_text}")
+    endif()
+    FetchContent_Declare(jbig2enc
+        SOURCE_DIR "${_jbig2enc_local_source}"
+    )
+else()
+    FetchContent_Declare(jbig2enc
+        GIT_REPOSITORY https://github.com/agl/jbig2enc
+        GIT_TAG        master
+        GIT_SHALLOW    TRUE
+    )
+endif()
 FetchContent_MakeAvailable(jbig2enc)
 if(TARGET Leptonica::Leptonica)
     target_link_libraries(djview PRIVATE libjbig2enc Leptonica::Leptonica)
