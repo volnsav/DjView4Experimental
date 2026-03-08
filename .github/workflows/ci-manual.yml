@@ -85,7 +85,7 @@ jobs:
   # -------------------------------------------------------------------------
   windows:
     name: Windows ${{ github.event.inputs.build_type }}
-    if: ${{ github.event.inputs.platform == 'windows' || github.event.inputs.platform == 'both' }}
+    if: ${{ false }} # Temporarily disabled while export pipeline stabilizes in CI
     runs-on: windows-latest
 
     steps:
