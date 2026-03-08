@@ -1,4 +1,29 @@
 
+NEW IN VERSION 4.14 (internal)
+------------------------------
+- PDF export with JBIG2 compression and dual-mask fill zones
+- Invisible text layer in exported PDF (searchable, copy-paste)
+- Shared JBIG2 symbol dictionary across pages
+- Type3 font with ToUnicode CMap for text encoding
+- Direct libjpeg grayscale encoder for B&W scanned pages
+- Export settings: DPI presets, JPEG quality, BG downscale factor,
+  force grayscale, JBIG2 similarity threshold, text layer toggle
+- jbig2enc via FetchContent, Leptonica via vcpkg
+
+
+NEW IN VERSION 4.13 (internal)
+------------------------------
+- Migrate build system from qmake/autotools to CMake 3.21+
+- Migrate to Qt6 (drop Qt4/Qt5 support)
+- Tabbed document window
+- Dark-theme rendering fixes
+- OpenGL renderer restored (Qt6 OpenGLWidgets)
+- Drop NPAPI browser plugin (npdjvu, nsdejavu)
+- CPack installer support
+- Windows deployment via RunWinDeployQt.cmake
+- Debian packaging updated for CMake+Qt6
+
+
 NEW IN VERSION 4.12
 -------------------
 - Fixes for recent compilers
