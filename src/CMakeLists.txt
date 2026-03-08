@@ -155,6 +155,17 @@ elseif(TARGET djvulibre)
     target_link_libraries(djview PRIVATE djvulibre)
 endif()
 
+# Internal DjVuLibre headers (DjVuImage.h, DjVuPalette.h, JB2Image.h, ...)
+# needed for ddjvu_get_DjVuImage() backdoor and direct palette access.
+if(DJVIEW_DJVU_SOURCE_DIR)
+    target_include_directories(djview PRIVATE
+        "${DJVIEW_DJVU_SOURCE_DIR}/libdjvu"
+    )
+    # DjVuLibre wraps classes in namespace DJVU when HAVE_NAMESPACES is set.
+    # The DLL was built with it, so we must match.
+    target_compile_definitions(djview PRIVATE HAVE_NAMESPACES=1)
+endif()
+
 # ---------------------------------------------------------------------------
 # libjpeg-turbo (direct grayscale JPEG encoding bypassing Qt plugin)
 # ---------------------------------------------------------------------------
