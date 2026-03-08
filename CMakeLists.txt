@@ -29,6 +29,15 @@ option(DJVIEW_BUILD_TRANSLATIONS
 set(DJVIEW_DJVU_INSTALL_DIR ""
     CACHE PATH "Optional path to a prebuilt DjVuLibreExperimental install prefix")
 
+# When ON, configure DjVuLibreExperimental as a CMake subdirectory via
+# FetchContent.  Uses the sibling directory if it exists (local dev), otherwise
+# clones the develop branch from GitHub.
+# When OFF (default) the existing find_package / DJVIEW_DJVU_INSTALL_DIR path
+# is used instead.
+option(DJVIEW_FETCH_DJVULIBRE
+    "Build DjVuLibreExperimental as an in-tree subdirectory (FetchContent)"
+    OFF)
+
 # ---------------------------------------------------------------------------
 # Propagate DjVuLibre prefix
 # ---------------------------------------------------------------------------
@@ -57,39 +66,83 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# Find DjVuLibre
+# Find / fetch DjVuLibre
 # ---------------------------------------------------------------------------
-# Try the installed CMake config first (DjVuLibreExperimental installs one).
-find_package(DjVuLibre CONFIG QUIET)
-if(NOT DjVuLibre_FOUND)
-    # Fall back to pkg-config (system DjVuLibre on Linux).
-    find_package(PkgConfig QUIET)
-    if(PkgConfig_FOUND)
-        # Debian/Ubuntu ships ddjvuapi.pc; some distros ship djvulibre.pc.
-        pkg_check_modules(djvulibre IMPORTED_TARGET djvulibre)
-        if(NOT djvulibre_FOUND)
-            pkg_check_modules(djvulibre IMPORTED_TARGET ddjvuapi)
-        endif()
-        if(djvulibre_FOUND)
-            # Expose a proper target alias so src/CMakeLists.txt is uniform.
-            add_library(DjVuLibre::DjVuLibre INTERFACE IMPORTED)
-            target_link_libraries(DjVuLibre::DjVuLibre
-                INTERFACE PkgConfig::djvulibre)
-            set(DjVuLibre_FOUND TRUE)
+if(DJVIEW_FETCH_DJVULIBRE)
+    # ---- In-tree build via FetchContent -----------------------------------
+    include(FetchContent)
+
+    # Prefer the sibling directory for local development.
+    set(_djvu_local "${CMAKE_SOURCE_DIR}/../DjVuLibreExperimental")
+    get_filename_component(_djvu_local "${_djvu_local}" ABSOLUTE)
+
+    if(IS_DIRECTORY "${_djvu_local}" AND EXISTS "${_djvu_local}/CMakeLists.txt")
+        message(STATUS "DjView4: FetchContent – using local ${_djvu_local}")
+        FetchContent_Declare(DjVuLibreFC
+            SOURCE_DIR "${_djvu_local}"
+        )
+    else()
+        # CI / fresh clone: pull the develop branch from GitHub.
+        message(STATUS "DjView4: FetchContent – cloning DjVuLibreExperimental@develop")
+        FetchContent_Declare(DjVuLibreFC
+            GIT_REPOSITORY "https://github.com/${DJVIEW_GITHUB_OWNER}/DjVuLibreExperimental.git"
+            GIT_TAG        develop
+            GIT_SHALLOW    TRUE
+        )
+    endif()
+
+    # Build without bundled deps on Windows (vcpkg provides jpeg/tiff/zlib)
+    # and without tests.
+    set(DJVULIBRE_USE_BUNDLED_DEPS OFF CACHE BOOL "" FORCE)
+    set(DJVULIBRE_ENABLE_GTEST     OFF CACHE BOOL "" FORCE)
+
+    FetchContent_MakeAvailable(DjVuLibreFC)
+    set(DjVuLibre_FOUND TRUE)
+    message(STATUS "DjView4: DjVuLibre configured via FetchContent")
+else()
+    # ---- Pre-installed / DJVIEW_DJVU_INSTALL_DIR --------------------------
+    find_package(DjVuLibre CONFIG QUIET)
+    if(NOT DjVuLibre_FOUND)
+        # Fall back to pkg-config (system DjVuLibre on Linux).
+        find_package(PkgConfig QUIET)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(djvulibre IMPORTED_TARGET djvulibre)
+            if(NOT djvulibre_FOUND)
+                pkg_check_modules(djvulibre IMPORTED_TARGET ddjvuapi)
+            endif()
+            if(djvulibre_FOUND)
+                add_library(DjVuLibre::DjVuLibre INTERFACE IMPORTED)
+                target_link_libraries(DjVuLibre::DjVuLibre
+                    INTERFACE PkgConfig::djvulibre)
+                set(DjVuLibre_FOUND TRUE)
+            endif()
         endif()
     endif()
-endif()
 
-if(NOT DjVuLibre_FOUND)
-    message(FATAL_ERROR
-        "DjVuLibre not found.\n"
-        "Options:\n"
-        "  1. Install libdjvulibre-dev (Linux) or build DjVuLibreExperimental.\n"
-        "  2. Pass -DDJVIEW_DJVU_INSTALL_DIR=<prefix> to point at the install.\n"
-        "  3. Add the install prefix to CMAKE_PREFIX_PATH.")
-endif()
+    if(NOT DjVuLibre_FOUND)
+        message(FATAL_ERROR
+            "DjVuLibre not found.\n"
+            "Options:\n"
+            "  1. Install libdjvulibre-dev (Linux) or build DjVuLibreExperimental.\n"
+            "  2. Pass -DDJVIEW_DJVU_INSTALL_DIR=<prefix> to point at the install.\n"
+            "  3. Pass -DDJVIEW_FETCH_DJVULIBRE=ON to build it automatically.\n"
+            "  4. Add the install prefix to CMAKE_PREFIX_PATH.")
+    endif()
 
-message(STATUS "DjView4: DjVuLibre found")
+    # On Windows the library is typically installed as Release-only.
+    # Map the Debug config to Release so TARGET_RUNTIME_DLLS includes the DLL
+    # even in Debug builds, and vcpkg's applocal.ps1 doesn't choke on it.
+    if(WIN32)
+        foreach(_djvu_tgt IN ITEMS DjVuLibre::djvulibre DjVuLibre::DjVuLibre)
+            if(TARGET "${_djvu_tgt}")
+                set_target_properties("${_djvu_tgt}" PROPERTIES
+                    MAP_IMPORTED_CONFIG_DEBUG "Release;RELEASE;")
+            endif()
+        endforeach()
+    endif()
+
+    message(STATUS "DjView4: DjVuLibre found")
+endif()
 
 # ---------------------------------------------------------------------------
 # Subdirectories

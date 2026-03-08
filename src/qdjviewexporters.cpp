@@ -1,4 +1,4 @@
-//C-  -*- C++ -*-
+﻿//C-  -*- C++ -*-
 //C- -------------------------------------------------------------------
 //C- DjView4
 //C- Copyright (c) 2006-  Leon Bottou
@@ -58,6 +58,9 @@
 #endif
 
 #include <QApplication>
+#include <QBuffer>
+#include <cstdarg>
+#include <cstdio>
 #include <QCheckBox>
 #include <QDebug>
 #include <QDir>
@@ -66,6 +69,10 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QImageWriter>
+#include <jpeglib.h>
+#include <setjmp.h>
+#include <jbig2enc.h>
+#include <leptonica/allheaders.h>
 #include <QList>
 #include <QMap>
 #include <QMessageBox>
@@ -81,8 +88,27 @@
 #include <QString>
 #include <QTemporaryFile>
 #include <QTimer>
+#include <QPainter>
+#include <QPageSize>
+#include <QPdfWriter>
+#include <QVector>
 
 #include <libdjvu/miniexp.h>
+// DjVuLibre internal headers — MUST be included BEFORE ddjvuapi.h
+// so that ddjvu_get_DjVuImage() backdoor becomes available.
+// Forward-declare ddjvu_page_s in DJVU namespace to match DLL ABI
+// (ddjvuapi.cpp does the same before including headers).
+#ifdef HAVE_NAMESPACES
+namespace DJVU {
+  struct ddjvu_page_s;
+  struct ddjvu_document_s;
+}
+#endif
+#include "DjVuImage.h"
+#include "DjVuPalette.h"
+#include "JB2Image.h"
+#include "GBitmap.h"
+#include "GPixmap.h"
 #include <libdjvu/ddjvuapi.h>
 
 #include "qdjview.h"
@@ -1695,147 +1721,1650 @@ QDjViewTiffExporter::doPage()
 
 
 // ----------------------------------------
-// QDJVIEWPDFEXPORTER
+// QDJVIEWPDFTEXTEXPORTER
+//
+// PDF exporter with optional invisible text overlay ("sandwich PDF").
+// Writes PDF 1.4 directly – bypasses QPdfWriter which in Qt6 always uses
+// FlateDecode (zlib) for images. Direct writing ensures DCT (JPEG) streams.
+
+#include "ui_qdjviewexportpdf.h"
+
+// Word-level zone collected from the DjVu hidden-text tree.
+struct PdfWordZone {
+  QRect   djvuRect;   // DjVu pixels, bottom-left origin, y increases upward
+  QString text;
+};
+
+// Recursively collect word-level zones from a miniexp text expression.
+static void
+pdfCollectWords(miniexp_t p, QVector<PdfWordZone> &words)
+{
+  if (!miniexp_consp(p) || !miniexp_symbolp(miniexp_car(p)))
+    return;
+  miniexp_t r = miniexp_cdr(p);
+  if (!miniexp_consp(r) || !miniexp_numberp(miniexp_car(r))) return;
+  int x1 = miniexp_to_int(miniexp_car(r)); r = miniexp_cdr(r);
+  if (!miniexp_consp(r) || !miniexp_numberp(miniexp_car(r))) return;
+  int y1 = miniexp_to_int(miniexp_car(r)); r = miniexp_cdr(r);
+  if (!miniexp_consp(r) || !miniexp_numberp(miniexp_car(r))) return;
+  int x2 = miniexp_to_int(miniexp_car(r)); r = miniexp_cdr(r);
+  if (!miniexp_consp(r) || !miniexp_numberp(miniexp_car(r))) return;
+  int y2 = miniexp_to_int(miniexp_car(r)); r = miniexp_cdr(r);
+  if (x2 < x1 || y2 < y1) return;
+  if (miniexp_consp(r) && miniexp_stringp(miniexp_car(r))) {
+    const char *s = miniexp_to_str(miniexp_car(r));
+    if (s && *s) {
+      PdfWordZone z;
+      z.djvuRect = QRect(x1, y1, x2 - x1, y2 - y1);
+      z.text     = QString::fromUtf8(s);
+      words.append(z);
+    }
+  } else {
+    while (miniexp_consp(r)) {
+      pdfCollectWords(miniexp_car(r), words);
+      r = miniexp_cdr(r);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Direct libjpeg grayscale encoder.
+// Qt's JPEG plugin may convert Format_Grayscale8 → RGB before encoding;
+// calling libjpeg directly guarantees 1-channel (Y-only) output which is
+// typically 3× smaller than an equivalent RGB JPEG for B&W scanned pages.
+// ---------------------------------------------------------------------------
+struct JpegGrayErrorMgr { jpeg_error_mgr pub; jmp_buf jmpBuf; };
+static void jpegGrayErrorExit(j_common_ptr cinfo)
+{
+  longjmp(reinterpret_cast<JpegGrayErrorMgr *>(cinfo->err)->jmpBuf, 1);
+}
+static QByteArray encodeJpegGray(const QImage &img, int quality)
+{
+  Q_ASSERT(img.format() == QImage::Format_Grayscale8);
+  jpeg_compress_struct cinfo;
+  JpegGrayErrorMgr     jerr;
+  cinfo.err           = jpeg_std_error(&jerr.pub);
+  jerr.pub.error_exit = jpegGrayErrorExit;
+  unsigned char *outbuf  = nullptr;
+  unsigned long  outsize = 0;
+  if (setjmp(jerr.jmpBuf)) {
+    jpeg_destroy_compress(&cinfo);
+    if (outbuf) free(outbuf);
+    return QByteArray();
+  }
+  jpeg_create_compress(&cinfo);
+  jpeg_mem_dest(&cinfo, &outbuf, &outsize);
+  cinfo.image_width      = (JDIMENSION)img.width();
+  cinfo.image_height     = (JDIMENSION)img.height();
+  cinfo.input_components = 1;
+  cinfo.in_color_space   = JCS_GRAYSCALE;
+  jpeg_set_defaults(&cinfo);
+  jpeg_set_quality(&cinfo, qBound(1, quality, 100), TRUE);
+  jpeg_start_compress(&cinfo, TRUE);
+  while (cinfo.next_scanline < cinfo.image_height) {
+    JSAMPROW row = const_cast<JSAMPLE *>(
+        reinterpret_cast<const JSAMPLE *>(img.constScanLine(cinfo.next_scanline)));
+    jpeg_write_scanlines(&cinfo, &row, 1);
+  }
+  jpeg_finish_compress(&cinfo);
+  jpeg_destroy_compress(&cinfo);
+  QByteArray result(reinterpret_cast<char *>(outbuf), (int)outsize);
+  free(outbuf);
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// JBIG2 encoding helpers (Leptonica + jbig2enc).
+// Used for B&W (grayscale) pages — lossless, much smaller than JPEG.
+// ---------------------------------------------------------------------------
+
+// Convert QImage (Format_Grayscale8) to Leptonica PIX* 1bpp via threshold.
+// Dark pixels (value < 128) → foreground (1).  Caller must pixDestroy().
+static PIX *qImageToPix1bpp(const QImage &gray)
+{
+  Q_ASSERT(gray.format() == QImage::Format_Grayscale8);
+  const int w = gray.width(), h = gray.height();
+  PIX *pix = pixCreate(w, h, 1);
+  if (!pix) return nullptr;
+  const int wpl = pixGetWpl(pix);
+  for (int y = 0; y < h; y++) {
+    const uchar  *src = gray.constScanLine(y);
+    l_uint32     *dst = pixGetData(pix) + y * wpl;
+    memset(dst, 0, wpl * sizeof(l_uint32));
+    for (int x = 0; x < w; x++) {
+      if (src[x] < 128) {             // dark pixel → set (foreground)
+        // Leptonica bit layout: bit 31-k of word k/32, MSB-first.
+        dst[x >> 5] |= (0x80000000u >> (x & 31));
+      }
+    }
+  }
+  return pix;
+}
+
+// Render a DjVu page using RENDER_BLACK at the given rect size directly into
+// a Leptonica PIX* 1bpp — no RGB24 intermediate, no threshold needed.
+// ddjvu MSBTOLSB format: each row is ceil(w/8) bytes, MSB-first.
+// Leptonica 1bpp: each row is ceil(w/32)*4 bytes (32-bit words), MSB-first.
+// Both are MSB-first so we can copy row-by-row with word-alignment padding.
+// Returns nullptr on failure. Caller must pixDestroy().
+static PIX *renderBlackToPix1bpp(ddjvu_page_t *page,
+                                  int w, int h)
+{
+  const int srcStride = (w + 7) / 8;   // bytes per row, MSBTOLSB
+  QByteArray buf(h * srcStride, '\0');
+
+  ddjvu_rect_t rect; rect.x = rect.y = 0;
+  rect.w = (unsigned)w; rect.h = (unsigned)h;
+  ddjvu_format_t *fmt = ddjvu_format_create(DDJVU_FORMAT_MSBTOLSB, 0, nullptr);
+  ddjvu_format_set_row_order(fmt, 1);
+  bool ok = ddjvu_page_render(page, DDJVU_RENDER_BLACK,
+                               &rect, &rect, fmt,
+                               srcStride,
+                               buf.data());
+  ddjvu_format_release(fmt);
+  if (!ok) return nullptr;
+
+  PIX *pix = pixCreate(w, h, 1);
+  if (!pix) return nullptr;
+  const int wpl = pixGetWpl(pix);          // 32-bit words per row in Leptonica
+  const int dstStride = wpl * 4;           // bytes per row in Leptonica
+
+  for (int y = 0; y < h; y++) {
+    const uchar  *src = reinterpret_cast<const uchar *>(buf.constData()) + y * srcStride;
+    l_uint32     *dst = pixGetData(pix) + y * wpl;
+    memset(dst, 0, dstStride);
+    // Copy full bytes; remaining bits within last partial word are already 0.
+    memcpy(dst, src, srcStride);
+    // ddjvu gives MSBTOLSB (byte 0 = leftmost 8 pixels, bit7=pixel0).
+    // Leptonica wants the same bit order but in big-endian 32-bit words.
+    // On little-endian (x86/x64) we need to byte-swap each 32-bit word.
+    for (int word = 0; word < wpl; word++) {
+      const l_uint32 v = dst[word];
+      dst[word] = ((v & 0xFF000000u) >> 24)
+                | ((v & 0x00FF0000u) >>  8)
+                | ((v & 0x0000FF00u) <<  8)
+                | ((v & 0x000000FFu) << 24);
+    }
+  }
+  return pix;
+}
+
+// Encode a grayscale QImage as a single-page JBIG2 generic region.
+// Returns raw segment data suitable for /JBIG2Decode embedding (no globals).
+// full_headers=false → no JBIG2 file header → correct for PDF.
+static QByteArray encodeJbig2Generic(const QImage &grayImg)
+{
+  if (grayImg.isNull()) return {};
+  const QImage &gray = (grayImg.format() == QImage::Format_Grayscale8)
+                     ? grayImg
+                     : grayImg.convertToFormat(QImage::Format_Grayscale8);
+  PIX *pix = qImageToPix1bpp(gray);
+  if (!pix) return {};
+  int       len  = 0;
+  uint8_t  *data = jbig2_encode_generic(pix,
+                     /*full_headers=*/false,
+                     /*xres=*/0, /*yres=*/0,
+                     /*dup_line_removal=*/false, &len);
+  pixDestroy(&pix);
+  if (!data || len <= 0) return {};
+  QByteArray result(reinterpret_cast<const char *>(data), len);
+  free(data);   // malloced by jbig2enc
+  return result;
+}
+
+// Encode a DjVu page black stencil as JBIG2 using 1bpp direct render.
+// Renders RENDER_BLACK at w×h, produces Leptonica PIX* via renderBlackToPix1bpp(),
+// then JBIG2-encodes it. No intermediate grayscale / threshold.
+static QByteArray encodeJbig2BlackRender(ddjvu_page_t *page, int w, int h)
+{
+  PIX *pix = renderBlackToPix1bpp(page, w, h);
+  if (!pix) return {};
+  int      len  = 0;
+  uint8_t *data = jbig2_encode_generic(pix,
+                    /*full_headers=*/false,
+                    /*xres=*/0, /*yres=*/0,
+                    /*dup_line_removal=*/false, &len);
+  pixDestroy(&pix);
+  if (!data || len <= 0) return {};
+  QByteArray result(reinterpret_cast<const char *>(data), len);
+  free(data);
+  return result;
+}
+
+// RawPdfCharset – maps Unicode codepoints to single-byte codes for a
+// Type3 font's custom encoding (up to 254 distinct codepoints).
+
+// Local printf-into-QByteArray helper used throughout the PDF writer.
+static QByteArray baf(const char *fmt, ...)
+{
+  char buf[1024];
+  va_list ap; va_start(ap, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, ap);
+  va_end(ap);
+  return QByteArray(buf);
+}
+
+class RawPdfCharset {
+public:
+  // Encode a codepoint; returns the byte code (allocates on first use).
+  // Returns 0xFF if the table is full.
+  uint8_t encode(uint32_t u) {
+    auto it = u2c_.find(u);
+    if (it != u2c_.end()) return it.value();
+    if (nextCode_ > 253)  return 0xFF;
+    uint8_t code = nextCode_++;
+    u2c_[u] = code;
+    c2u_.resize(nextCode_, 0);
+    c2u_[code] = u;
+    return code;
+  }
+
+  // Encode every character in s into a byte-string.
+  QByteArray encodeString(const QString &s) {
+    QByteArray out;
+    out.reserve(s.size());
+    for (const QChar c : s) {
+      uint8_t b = encode((uint32_t)c.unicode());
+      out += (char)b;
+    }
+    return out;
+  }
+
+  // List of "code /uniXXXX" pairs for the /Differences array.
+  QByteArray buildDifferences() const {
+    QByteArray d;
+    for (int i = 0; i < (int)c2u_.size(); ++i)
+      d += baf(" %d /uni%04X", i, (unsigned)c2u_[i]);
+    return d;
+  }
+
+  int      size()           const { return (int)c2u_.size(); }
+  uint32_t unicode(int idx) const { return c2u_.value(idx, '?'); }
+
+private:
+  QMap<uint32_t, uint8_t> u2c_;
+  QVector<uint32_t>       c2u_;
+  uint8_t nextCode_ = 0;
+};
+
+// ---------------------------------------------------------------------------
+// RawPdfWriter – minimal PDF 1.4 writer.
+//   * JPEG images embedded as DCT streams (true JPEG, respects quality setting)
+//   * Invisible text layer via a Type3 font with ToUnicode CMap (Tr=3)
+//   * Standard xref/trailer
+
+class RawPdfWriter {
+public:
+  explicit RawPdfWriter() {}
+
+  bool open(const QString &path, int jpegQuality) {
+    jpegQ_ = qBound(1, jpegQuality, 100);
+    file_.setFileName(path);
+    if (!file_.open(QIODevice::WriteOnly | QIODevice::Truncate))
+      return false;
+    nextObj_ = 4;  // 1=Catalog 2=Pages 3=Font written in finalize()
+    xref_.clear(); pageObjs_.clear(); charset_ = RawPdfCharset();
+    write("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+    return true;
+  }
+
+  bool isOpen() const { return file_.isOpen(); }
+
+  // Add one page.
+  // For JPEG pages (isJbig2=false): imgData must be a valid JPEG stream (FF D8).
+  // For JBIG2 pages (isJbig2=true):  imgData is a raw JBIG2 generic region
+  //   (full_headers=false output from jbig2_encode_generic), 1bpp, DeviceGray.
+  bool addPage(double mmW, double mmH,
+               const QByteArray &imgData, int imgW, int imgH,
+               bool isGray, bool isJbig2,
+               const QVector<PdfWordZone> &words,
+               int jbig2GlobalsObj = 0)
+  {
+    if (!file_.isOpen()) return false;
+    if (imgData.isEmpty()) return false;
+    if (!isJbig2) {
+      // Validate JPEG header
+      if ((unsigned char)(imgData[0]) != 0xFF
+       || (unsigned char)(imgData[1]) != 0xD8)
+        return false;
+    }
+
+    // Page dimensions in PDF points (1 pt = 1/72 inch).
+    const double ptW = mmW / 25.4 * 72.0;
+    const double ptH = mmH / 25.4 * 72.0;
+
+    // --- Image XObject ---
+    const int imgObj = alloc();
+    beginObj(imgObj);
+    if (isJbig2) {
+      QByteArray imgHdr;
+      imgHdr += baf(
+        "<< /Type /XObject /Subtype /Image\n"
+        "   /Width %d /Height %d\n"
+        "   /ColorSpace /DeviceGray /BitsPerComponent 1\n"
+        "   /Filter /JBIG2Decode\n", imgW, imgH);
+      if (jbig2GlobalsObj > 0)
+        imgHdr += baf("   /DecodeParms << /JBIG2Globals %d 0 R >>\n", jbig2GlobalsObj);
+      imgHdr += baf("   /Length %d >>\nstream\n", (int)imgData.size());
+      write(imgHdr);
+    } else {
+      write(baf(
+        "<< /Type /XObject /Subtype /Image\n"
+        "   /Width %d /Height %d\n"
+        "   /ColorSpace %s /BitsPerComponent 8\n"
+        "   /Filter /DCTDecode /Length %d >>\n"
+        "stream\n",
+        imgW, imgH,
+        isGray ? "/DeviceGray" : "/DeviceRGB",
+        (int)imgData.size()));
+    }
+    file_.write(imgData);
+    write("\nendstream\n");
+    endObj();
+
+    // --- Content stream ---
+    // Coordinate note: DjVu text coords are in DjVu-pixel space, origin
+    // bottom-left, y increases upward — the same orientation as PDF user space.
+    // Scale factor: DjVu pixels → PDF points = ptW/imgW (horizontal),
+    //                                           ptH/imgH (vertical).
+    const double sx = ptW  / imgW;
+    const double sy = ptH  / imgH;
+
+    QByteArray cs;
+    cs += baf(
+      "q\n%.4f 0 0 %.4f 0 0 cm\n/Im Do\nQ\n", ptW, ptH);
+
+    if (!words.isEmpty()) {
+      cs += "BT\n3 Tr\n";   // Tr=3: invisible rendering mode
+      for (const PdfWordZone &w : words) {
+        if (w.text.isEmpty()) continue;
+        const double x1  = w.djvuRect.left()   * sx;
+        const double y1  = w.djvuRect.top()     * sy;  // bottom of word
+        const double wPt = w.djvuRect.width()   * sx;
+        const double hPt = w.djvuRect.height()  * sy;
+        if (wPt <= 0.0 || hPt <= 0.0) continue;
+        // Horizontal scale: stretch to fill word zone.
+        // Type3 font: Widths=[1], FontMatrix=[1 0 0 1 0 0] → advance = 1.0 per glyph.
+        const int    nch    = qMax(1, w.text.size());
+        const double scaleX = wPt / (1.0 * hPt * nch);
+        QByteArray encoded  = charset_.encodeString(w.text);
+        // Hex-encode the string: <AABB...>
+        QByteArray hex;
+        hex.reserve(encoded.size() * 2);
+        for (unsigned char byte : encoded)
+          hex += baf("%02X", (unsigned)byte);
+        // Text matrix [a 0 0 d e f]: a=scaleX*hPt, d=hPt, (e,f)=position.
+        cs += baf(
+          "/F0 1 Tf\n%.4f 0 0 %.4f %.4f %.4f Tm\n<%s> Tj\n",
+          scaleX * hPt, hPt, x1, y1, hex.constData());
+      }
+      cs += "ET\n";
+    }
+
+    const int csObj = alloc();
+    beginObj(csObj);
+    write(baf("<< /Length %d >>\nstream\n", (int)cs.size()));
+    file_.write(cs);
+    write("\nendstream\n");
+    endObj();
+
+    // --- Page object ---
+    const int pageObj = alloc();
+    beginObj(pageObj);
+    write(baf(
+      "<< /Type /Page /Parent 2 0 R\n"
+      "   /MediaBox [0 0 %.4f %.4f]\n"
+      "   /Contents %d 0 R\n"
+      "   /Resources << /XObject << /Im %d 0 R >>\n"
+      "                 /Font << /F0 3 0 R >> >> >>\n",
+      ptW, ptH, csObj, imgObj));
+    endObj();
+
+    pageObjs_.append(pageObj);
+    return true;
+  }
+
+  // Add a 2-layer page: BG (JPEG) + JBIG2 ImageMask stencil.
+  //   BG   = RENDER_BACKGROUND JPEG (IW44 layer — photo, paper texture)
+  //   Mask = RENDER_BLACK JBIG2 as /ImageMask true — paints current fill
+  //          color (black) where ink pixels are; BG shows through paper.
+  //
+  // DjVu MSBTOLSB convention: 0=ink, 1=paper.
+  // /ImageMask true with default /Decode [0 1]: sample 0 → paint, 1 → transparent.
+  // So ink(0) → painted black, paper(1) → BG shows through.  Correct.
+  //
+  // textW, textH = DjVu native page dimensions for text coordinate scaling.
+  bool addBgMaskPage(double mmW, double mmH,
+                     const QByteArray &bgData, int bgW, int bgH, bool bgIsGray,
+                     const QByteArray &maskData, int maskW, int maskH,
+                     const QVector<PdfWordZone> &words,
+                     int textW, int textH,
+                     int jbig2GlobalsObj = 0)
+  {
+    if (!file_.isOpen()) return false;
+    if (bgData.isEmpty() || maskData.isEmpty()) return false;
+
+    const double ptW = mmW / 25.4 * 72.0;
+    const double ptH = mmH / 25.4 * 72.0;
+
+    // 1. Background XObject (JPEG).
+    const int bgObj = alloc();
+    beginObj(bgObj);
+    write(baf(
+      "<< /Type /XObject /Subtype /Image\n"
+      "   /Width %d /Height %d\n"
+      "   /ColorSpace %s /BitsPerComponent 8\n"
+      "   /Filter /DCTDecode /Length %d >>\n"
+      "stream\n",
+      bgW, bgH, bgIsGray ? "/DeviceGray" : "/DeviceRGB", (int)bgData.size()));
+    file_.write(bgData);
+    write("\nendstream\n");
+    endObj();
+
+    // 2. Mask XObject — /ImageMask true, JBIG2.
+    //    No /ColorSpace needed (implied by ImageMask).
+    //    Default /Decode [0 1] is correct for DjVu 0=ink convention.
+    const int maskObj = alloc();
+    beginObj(maskObj);
+    {
+      QByteArray maskHdr;
+      maskHdr += baf(
+        "<< /Type /XObject /Subtype /Image\n"
+        "   /Width %d /Height %d\n"
+        "   /ImageMask true /BitsPerComponent 1\n"
+        "   /Interpolate false\n"
+        "   /Filter /JBIG2Decode\n", maskW, maskH);
+      if (jbig2GlobalsObj > 0)
+        maskHdr += baf("   /DecodeParms << /JBIG2Globals %d 0 R >>\n", jbig2GlobalsObj);
+      maskHdr += baf("   /Length %d >>\nstream\n", (int)maskData.size());
+      write(maskHdr);
+    }
+    file_.write(maskData);
+    write("\nendstream\n");
+    endObj();
+
+    // 3. Content stream: paint BG full page, then paint mask as black stencil.
+    //    Text coordinates use DjVu native pixel space (textW × textH).
+    const double sx = (textW > 0) ? ptW / textW : ptW / maskW;
+    const double sy = (textH > 0) ? ptH / textH : ptH / maskH;
+    QByteArray cs;
+    cs += baf("q\n%.4f 0 0 %.4f 0 0 cm\n/BG Do\nQ\n", ptW, ptH);
+    cs += baf("q\n0 g\n%.4f 0 0 %.4f 0 0 cm\n/Mask Do\nQ\n", ptW, ptH);
+    if (!words.isEmpty()) {
+      cs += "BT\n3 Tr\n";
+      for (const PdfWordZone &w : words) {
+        if (w.text.isEmpty()) continue;
+        const double x1  = w.djvuRect.left()   * sx;
+        const double y1  = w.djvuRect.top()     * sy;
+        const double wPt = w.djvuRect.width()   * sx;
+        const double hPt = w.djvuRect.height()  * sy;
+        if (wPt <= 0.0 || hPt <= 0.0) continue;
+        const int    nch    = qMax(1, w.text.size());
+        const double scaleX = wPt / (1.0 * hPt * nch);
+        QByteArray encoded  = charset_.encodeString(w.text);
+        QByteArray hex;
+        hex.reserve(encoded.size() * 2);
+        for (unsigned char byte : encoded)
+          hex += baf("%02X", (unsigned)byte);
+        cs += baf(
+          "/F0 1 Tf\n%.4f 0 0 %.4f %.4f %.4f Tm\n<%s> Tj\n",
+          scaleX * hPt, hPt, x1, y1, hex.constData());
+      }
+      cs += "ET\n";
+    }
+
+    const int csObj = alloc();
+    beginObj(csObj);
+    write(baf("<< /Length %d >>\nstream\n", (int)cs.size()));
+    file_.write(cs);
+    write("\nendstream\n");
+    endObj();
+
+    // 4. Page object.
+    const int pageObj = alloc();
+    beginObj(pageObj);
+    write(baf(
+      "<< /Type /Page /Parent 2 0 R\n"
+      "   /MediaBox [0 0 %.4f %.4f]\n"
+      "   /Contents %d 0 R\n"
+      "   /Resources << /XObject << /BG %d 0 R /Mask %d 0 R >>\n"
+      "                 /Font << /F0 3 0 R >> >> >>\n",
+      ptW, ptH, csObj, bgObj, maskObj));
+    endObj();
+
+    pageObjs_.append(pageObj);
+    return true;
+  }
+
+  // Add a dual-mask page: BG (JPEG) + full JBIG2 mask + fill JBIG2 mask.
+  //   BG       = RENDER_BACKGROUND JPEG (IW44 layer — photos, paper texture)
+  //   TextMask = RENDER_BLACK JBIG2 /ImageMask — ALL ink (text + fill)
+  //   FillMask = JBIG2 /ImageMask — fill blits only (text cut out)
+  //
+  // Paint order:
+  //   1) Paint BG (photos, paper texture)
+  //   2) Paint full mask with 0 g (black) → all ink areas become black
+  //   3) Paint fill mask with fillGray g (gray) → fill areas override to gray
+  //      (text areas stay black because fill mask is transparent there)
+  //
+  // Full mask goes through multi-page JBIG2 symbol dictionary (proven).
+  // Fill mask is encoded as standalone generic JBIG2.
+  //
+  // textW, textH = DjVu native page dimensions for text coordinate scaling.
+  bool addBgDualMaskPage(double mmW, double mmH,
+                         const QByteArray &bgData, int bgW, int bgH, bool bgIsGray,
+                         const QByteArray &textMaskData, int maskW, int maskH,
+                         const QByteArray &fillMaskData,
+                         double fillGray,
+                         const QVector<PdfWordZone> &words,
+                         int textW, int textH,
+                         int jbig2GlobalsObj = 0)
+  {
+    if (!file_.isOpen()) return false;
+    if (bgData.isEmpty() || textMaskData.isEmpty() || fillMaskData.isEmpty()) return false;
+
+    const double ptW = mmW / 25.4 * 72.0;
+    const double ptH = mmH / 25.4 * 72.0;
+
+    // 1. Background XObject (JPEG).
+    const int bgObj = alloc();
+    beginObj(bgObj);
+    write(baf(
+      "<< /Type /XObject /Subtype /Image\n"
+      "   /Width %d /Height %d\n"
+      "   /ColorSpace %s /BitsPerComponent 8\n"
+      "   /Filter /DCTDecode /Length %d >>\n"
+      "stream\n",
+      bgW, bgH, bgIsGray ? "/DeviceGray" : "/DeviceRGB", (int)bgData.size()));
+    file_.write(bgData);
+    write("\nendstream\n");
+    endObj();
+
+    // 2. Fill mask XObject — /ImageMask true, JBIG2 generic (no globals).
+    //    Painted with fillGray color → gray fill zones at full resolution.
+    //    jbig2_encode_generic inverts polarity (PIX 0→sample 1, PIX 1→sample 0),
+    //    so we need /Decode [1 0] to compensate: sample 1 → paint, sample 0 → transparent.
+    const int fillObj = alloc();
+    beginObj(fillObj);
+    {
+      QByteArray hdr;
+      hdr += baf(
+        "<< /Type /XObject /Subtype /Image\n"
+        "   /Width %d /Height %d\n"
+        "   /ImageMask true /BitsPerComponent 1\n"
+        "   /Decode [1 0]\n"
+        "   /Interpolate false\n"
+        "   /Filter /JBIG2Decode\n", maskW, maskH);
+      // No /DecodeParms — fill mask is encoded as standalone generic JBIG2.
+      hdr += baf("   /Length %d >>\nstream\n", (int)fillMaskData.size());
+      write(hdr);
+    }
+    file_.write(fillMaskData);
+    write("\nendstream\n");
+    endObj();
+
+    // 3. Text mask XObject — /ImageMask true, JBIG2.
+    //    Painted with 0 g (black) → crisp text at full resolution.
+    const int textObj = alloc();
+    beginObj(textObj);
+    {
+      QByteArray hdr;
+      hdr += baf(
+        "<< /Type /XObject /Subtype /Image\n"
+        "   /Width %d /Height %d\n"
+        "   /ImageMask true /BitsPerComponent 1\n"
+        "   /Interpolate false\n"
+        "   /Filter /JBIG2Decode\n", maskW, maskH);
+      if (jbig2GlobalsObj > 0)
+        hdr += baf("   /DecodeParms << /JBIG2Globals %d 0 R >>\n", jbig2GlobalsObj);
+      hdr += baf("   /Length %d >>\nstream\n", (int)textMaskData.size());
+      write(hdr);
+    }
+    file_.write(textMaskData);
+    write("\nendstream\n");
+    endObj();
+
+    // 4. Content stream:
+    //    a) Paint BG full page (photos, paper texture)
+    //    b) Paint full mask with 0 g (all ink black — text + fill areas)
+    //    c) Paint fill mask with fillGray g on top (overrides fill areas
+    //       from black to gray; text stays black because fill mask is
+    //       transparent at text positions)
+    //    d) Invisible text layer for selection/search
+    const double sx = (textW > 0) ? ptW / textW : ptW / maskW;
+    const double sy = (textH > 0) ? ptH / textH : ptH / maskH;
+    QByteArray cs;
+    cs += baf("q\n%.4f 0 0 %.4f 0 0 cm\n/BG Do\nQ\n", ptW, ptH);
+    cs += baf("q\n0 g\n%.4f 0 0 %.4f 0 0 cm\n/Text Do\nQ\n", ptW, ptH);
+    cs += baf("q\n%.4f g\n%.4f 0 0 %.4f 0 0 cm\n/Fill Do\nQ\n",
+              fillGray, ptW, ptH);
+    if (!words.isEmpty()) {
+      cs += "BT\n3 Tr\n";
+      for (const PdfWordZone &w : words) {
+        if (w.text.isEmpty()) continue;
+        const double x1  = w.djvuRect.left()   * sx;
+        const double y1  = w.djvuRect.top()     * sy;
+        const double wPt = w.djvuRect.width()   * sx;
+        const double hPt = w.djvuRect.height()  * sy;
+        if (wPt <= 0.0 || hPt <= 0.0) continue;
+        const int    nch    = qMax(1, w.text.size());
+        const double scaleX = wPt / (1.0 * hPt * nch);
+        QByteArray encoded  = charset_.encodeString(w.text);
+        QByteArray hex;
+        hex.reserve(encoded.size() * 2);
+        for (unsigned char byte : encoded)
+          hex += baf("%02X", (unsigned)byte);
+        cs += baf(
+          "/F0 1 Tf\n%.4f 0 0 %.4f %.4f %.4f Tm\n<%s> Tj\n",
+          scaleX * hPt, hPt, x1, y1, hex.constData());
+      }
+      cs += "ET\n";
+    }
+
+    const int csObj = alloc();
+    beginObj(csObj);
+    write(baf("<< /Length %d >>\nstream\n", (int)cs.size()));
+    file_.write(cs);
+    write("\nendstream\n");
+    endObj();
+
+    // 5. Page object.
+    const int pageObj = alloc();
+    beginObj(pageObj);
+    write(baf(
+      "<< /Type /Page /Parent 2 0 R\n"
+      "   /MediaBox [0 0 %.4f %.4f]\n"
+      "   /Contents %d 0 R\n"
+      "   /Resources << /XObject << /BG %d 0 R /Fill %d 0 R /Text %d 0 R >>\n"
+      "                 /Font << /F0 3 0 R >> >> >>\n",
+      ptW, ptH, csObj, bgObj, fillObj, textObj));
+    endObj();
+
+    pageObjs_.append(pageObj);
+    return true;
+  }
+
+  // Write the JBIG2 global symbol-dictionary stream (shared across pages).
+  // Returns the PDF object number for /DecodeParms << /JBIG2Globals N 0 R >>.
+  int writeJbig2Globals(const QByteArray &globalsData) {
+    if (!file_.isOpen() || globalsData.isEmpty()) return 0;
+    const int obj = alloc();
+    beginObj(obj);
+    write(baf("<< /Length %d >>\nstream\n", (int)globalsData.size()));
+    file_.write(globalsData);
+    write("\nendstream\n");
+    endObj();
+    return obj;
+  }
+
+  // Flush cross-ref table and trailer. Returns false on I/O error.
+  bool finalize() {
+    if (!file_.isOpen()) return false;
+
+    writeFont();   // obj 3
+
+    // Pages object (obj 2).
+    // NOTE: do NOT use baf() here — Kids array can exceed the 1024-byte limit.
+    beginObj(2);
+    QByteArray kids = "[";
+    for (int p : pageObjs_) kids += QByteArray::number(p) + " 0 R ";
+    kids += "]";
+    QByteArray pagesDict = "<< /Type /Pages /Kids " + kids
+                         + " /Count " + QByteArray::number((int)pageObjs_.size())
+                         + " >>\n";
+    write(pagesDict);
+    endObj();
+
+    // Catalog (obj 1).
+    beginObj(1);
+    write("<< /Type /Catalog /Pages 2 0 R >>\n");
+    endObj();
+
+    // Cross-reference table.
+    const qint64 xrefPos = file_.pos();
+    write(baf("xref\n0 %d\n", nextObj_));
+    write("0000000000 65535 f \n");
+    for (int i = 1; i < nextObj_; ++i)
+      write(baf("%010lld 00000 n \n",
+                                 (long long)xref_.value(i, 0)));
+
+    write(baf(
+      "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%lld\n%%%%EOF\n",
+      nextObj_, (long long)xrefPos));
+
+    file_.close();
+    return true;
+  }
+
+  void abandon() {
+    QString fn = file_.fileName();
+    file_.close();
+    if (!fn.isEmpty()) QFile::remove(fn);
+  }
+
+private:
+  QFile             file_;
+  QMap<int, qint64> xref_;
+  int               nextObj_ = 4;
+  QVector<int>      pageObjs_;
+  RawPdfCharset     charset_;
+  int               jpegQ_   = 75;
+
+  int alloc() { return nextObj_++; }
+
+  void beginObj(int n) {
+    xref_[n] = file_.pos();
+    file_.write(QByteArray::number(n) + " 0 obj\n");
+  }
+  void endObj()                     { file_.write("endobj\n"); }
+  void write(const QByteArray &b)   { file_.write(b); }
+  void write(const char *s)         { file_.write(s); }
+
+  // Write the Type3 font (object 3) with ToUnicode CMap.
+  void writeFont() {
+    const int sz = charset_.size();
+
+    // Empty glyph proc shared by all characters ("1 0 d0" = unit advance, no paint).
+    const QByteArray glyphStream("1 0 d0\n");
+    const int glyphObj = alloc();
+    beginObj(glyphObj);
+    write(baf("<< /Length %d >>\nstream\n",
+                               (int)glyphStream.size()));
+    file_.write(glyphStream);
+    write("\nendstream\n");
+    endObj();
+
+    // ToUnicode CMap stream.
+    QByteArray cmap;
+    cmap += "/CIDInit /ProcSet findresource begin\n"
+            "12 dict begin\nbegincmap\n"
+            "/CMapName /DjView-Text def\n"
+            "/CMapType 1 def\n"
+            "/CIDSystemInfo << /Registry (DjView) /Ordering (Text)"
+            " /Supplement 0 >> def\n";
+    cmap += baf(
+      "1 begincodespacerange\n<00> <%02X>\nendcodespacerange\n",
+      sz > 0 ? sz - 1 : 0);
+    for (int base = 0; base < sz; base += 100) {
+      const int end = qMin(base + 100, sz);
+      cmap += baf("%d beginbfchar\n", end - base);
+      for (int i = base; i < end; ++i) {
+        uint32_t u = charset_.unicode(i);
+        if (u < 0x10000) {
+          cmap += baf("<%02X> <%04X>\n", i, u);
+        } else {
+          u -= 0x10000;
+          cmap += baf("<%02X> <%04X%04X>\n", i,
+                                       (unsigned)(0xD800 + (u >> 10)),
+                                       (unsigned)(0xDC00 + (u & 0x3FF)));
+        }
+      }
+      cmap += "endbfchar\n";
+    }
+    cmap += "endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n";
+
+    const int cmapObj = alloc();
+    beginObj(cmapObj);
+    write(baf("<< /Length %d >>\nstream\n", (int)cmap.size()));
+    file_.write(cmap);
+    write("\nendstream\n");
+    endObj();
+
+    // CharProcs: every glyph name → same empty glyph object.
+    QByteArray charProcs = "<<\n";
+    for (int i = 0; i < sz; ++i)
+      charProcs += baf("  /uni%04X %d 0 R\n",
+                                        (unsigned)charset_.unicode(i), glyphObj);
+    charProcs += ">>";
+
+    // Widths: all 1 (unit width in glyph space; actual visual width is 0).
+    QByteArray widths = "[";
+    for (int i = 0; i < sz; ++i) widths += "1 ";
+    widths += "]";
+
+    // Font object (obj 3) — built with QByteArray concatenation to avoid
+    // baf()'s 1024-char limit being exceeded by large CharProcs/Widths.
+    beginObj(3);
+    QByteArray fontDict;
+    fontDict += "<< /Type /Font /Subtype /Type3\n";
+    fontDict += "   /FontBBox [0 0 1 1]\n";
+    fontDict += "   /FontMatrix [1 0 0 1 0 0]\n";
+    fontDict += baf("   /FirstChar 0 /LastChar %d\n", sz > 0 ? sz - 1 : 0);
+    fontDict += "   /Widths " + widths + "\n";
+    fontDict += "   /CharProcs " + charProcs + "\n";
+    fontDict += "   /Encoding << /Type /Encoding /Differences [0";
+    fontDict += charset_.buildDifferences();
+    fontDict += "] >>\n";
+    fontDict += baf("   /ToUnicode %d 0 R >>\n", cmapObj);
+    file_.write(fontDict);
+    endObj();
+  }
+};
 
 
-class QDjViewPdfExporter : public QDjViewTiffExporter
+class QDjViewPdfTextExporter : public QDjViewPageExporter
 {
   Q_OBJECT
 public:
   static QDjViewExporter *create(QDialog*, QDjView*, QString);
   static void setup();
 public:
-  QDjViewPdfExporter(QDialog *parent, QDjView *djview, QString name);
+  QDjViewPdfTextExporter(QDialog *parent, QDjView *djview, QString name);
+  ~QDjViewPdfTextExporter();
+  virtual void resetProperties();
+  virtual void loadProperties(QString group);
+  virtual void saveProperties(QString group);
+  virtual int propertyPages();
+  virtual QWidget* propertyPage(int num);
   virtual bool save(QString fileName);
 protected:
+  virtual void closeFile();
   virtual void doFinal();
-protected:
-  QTemporaryFile tempFile;
-  QFile pdfFile;
+  virtual void doPage();
+private:
+  Ui::QDjViewExportPdf ui;
+  QPointer<QWidget>    settingsPage;
+  QString              outFileName;
+  RawPdfWriter        *rawPdf;
+  QFile                logFile_;
+
+  // Deferred page data for multi-page JBIG2 encoding with /JBIG2Globals.
+  // All pages are buffered during doPage() and written in doFinal() after
+  // building a shared symbol dictionary across all mask bitmaps.
+  struct DeferredPageData {
+    enum Type { PAGE_PHOTO_JPEG, PAGE_BITONAL, PAGE_COMPOUND };
+    Type type = PAGE_PHOTO_JPEG;
+    double mmW = 0, mmH = 0;
+    int srcW = 0, srcH = 0;  // DjVu native page dimensions (for text scaling)
+    // PAGE_PHOTO_JPEG: single image
+    QByteArray jpegData;
+    int jpegW = 0, jpegH = 0;
+    bool jpegIsGray = false;
+    // PAGE_COMPOUND: BG
+    QByteArray bgData;
+    int bgW = 0, bgH = 0;
+    bool bgIsGray = false;
+    // PAGE_COMPOUND: FG analysis for dual-mask split
+    bool hasFills = false;     // true → use dual-mask (text + fill)
+    double fillGray = 0.0;    // PDF gray level for fill (0=black, 1=white)
+    PIX *fillMaskPix = nullptr;  // fill-only mask (encoded separately as generic JBIG2)
+    // COMPOUND / BITONAL: mask dimensions
+    int maskW = 0, maskH = 0;
+    int jbig2Index = -1;  // index into jbig2Pixes_ (-1 = none)
+    // Text layer
+    QVector<PdfWordZone> words;
+  };
+  QVector<DeferredPageData> deferredPages_;
+  QVector<PIX*>             jbig2Pixes_;
 };
 
 
 QDjViewExporter*
-QDjViewPdfExporter::create(QDialog *parent, QDjView *djview, QString name)
+QDjViewPdfTextExporter::create(QDialog *parent, QDjView *djview, QString name)
 {
   if (name == "PDF")
-    return new QDjViewPdfExporter(parent, djview, name);
-  return 0;
+    return new QDjViewPdfTextExporter(parent, djview, name);
+  return nullptr;
 }
 
 
 void
-QDjViewPdfExporter::setup()
+QDjViewPdfTextExporter::setup()
 {
   addExporterData("PDF", "pdf",
                   tr("PDF Document"),
                   tr("PDF Files (*.pdf)"),
-                  QDjViewPdfExporter::create);
+                  QDjViewPdfTextExporter::create);
 }
 
 
-QDjViewPdfExporter::QDjViewPdfExporter(QDialog *parent, QDjView *djview,
-                                         QString name)
-  : QDjViewTiffExporter(parent, djview, name)
+QDjViewPdfTextExporter::QDjViewPdfTextExporter(QDialog *parent, QDjView *djview,
+                                               QString  name)
+  : QDjViewPageExporter(parent, djview, name),
+    rawPdf(nullptr)
 {
-  page->setObjectName(tr("PDF Options", "tab caption"));
-  page->setWhatsThis(tr("<html><b>PDF options.</b><br>"
-                        "These options control the characteristics of "
-                        "the images embedded in the exported PDF files. "
-                        "The resolution box limits their maximal resolution. "
-                        "Forcing bitonal G4 compression "
-                        "encodes all pages in black and white "
-                        "using the CCITT Group 4 compression. "
-                        "Allowing JPEG compression uses lossy JPEG "
-                        "for all non bitonal or subsampled images. "
-                        "Otherwise, allowing deflate compression "
-                        "produces more compact files. "
-                        "</html>") );
+  settingsPage = new QWidget();
+  ui.setupUi(settingsPage);
+  settingsPage->setObjectName(tr("PDF Options", "tab caption"));
+  resetProperties();
+  settingsPage->setWhatsThis(
+    tr("<html><b>PDF options.</b><br>"
+       "The resolution box limits the maximum output image resolution. "
+       "JPEG quality controls image compression "
+       "(1&nbsp;=&nbsp;worst, 100&nbsp;=&nbsp;best). "
+       "The background downscale factor reduces the resolution of "
+       "photo/background layers (higher&nbsp;=&nbsp;smaller file, lower quality). "
+       "Force grayscale encodes all images as 1-channel, saving space "
+       "for B&amp;W scanned documents. "
+       "The JBIG2 similarity threshold controls how aggressively "
+       "similar glyphs are merged (lower&nbsp;=&nbsp;smaller file, less accurate). "
+       "Enabling the text layer embeds the hidden OCR/text stored in "
+       "the DjVu file as an invisible overlay, making the PDF "
+       "searchable and allowing copy-paste of text."
+       "</html>"));
 }
 
 
-void 
-QDjViewPdfExporter::doFinal()
+QDjViewPdfTextExporter::~QDjViewPdfTextExporter()
 {
-  QString message;
-  // close tiff
-#if HAVE_TIFF2PDF
-  tiffExporter = this;
-  TIFFSetErrorHandler(tiffHandler);
-  TIFFSetWarningHandler(0);
-  if (tiff)
-    TIFFClose(tiff);
-  tiff = 0;
-  // open files
-  TIFF *input = 0;
-  FILE *output = 0;
-  QByteArray inameArray = file.fileName().toLocal8Bit();
-  QByteArray onameArray = pdfFile.fileName().toLocal8Bit();
-  file.close();
-  if (file.open(QIODevice::ReadOnly))
-    input = TIFFFdOpen(wdup(file.handle()), inameArray.data(), "r");
-  if (pdfFile.open(QIODevice::WriteOnly))
-    output = djv_fdopen(wdup(pdfFile.handle()),"wb");
-  if (input && output)
-    {
-      const char *argv[3];
-      argv[0] = "tiff2pdf";
-      argv[1] = "-o";
-      argv[2] = onameArray.data();
-      if (tiff2pdf(input, output, 3, argv) != EXIT_SUCCESS)
-        message = tr("Error while creating pdf file.");
-    }
-  else if (! output)
-    {
-      message = tr("Unable to create output file.");
-      if (! pdfFile.errorString().isEmpty())
-        message = tr("System error: %1.").arg(pdfFile.errorString());
-    }
+  closeFile();
+  delete settingsPage;
+}
+
+
+void
+QDjViewPdfTextExporter::resetProperties()
+{
+  ui.dpiComboBox->setCurrentIndex(4);  // 300 dpi
+  ui.jpegQualitySpinBox->setValue(75);
+  ui.bgScaleSpinBox->setValue(3);
+  ui.forceGrayscaleCheckBox->setChecked(false);
+  ui.jbig2ThreshSpinBox->setValue(85);
+  ui.textLayerCheckBox->setChecked(true);
+}
+
+
+void
+QDjViewPdfTextExporter::loadProperties(QString group)
+{
+  QSettings s;
+  if (group.isEmpty()) group = "Export-" + name();
+  s.beginGroup(group);
+  {
+    const int dpi = s.value("dpi", 300).toInt();
+    int idx = ui.dpiComboBox->findText(QString::number(dpi) + " dpi");
+    ui.dpiComboBox->setCurrentIndex(idx >= 0 ? idx : 4);
+  }
+  ui.jpegQualitySpinBox->setValue(s.value("jpegQuality", 75).toInt());
+  ui.bgScaleSpinBox->setValue(s.value("bgScale", 3).toInt());
+  ui.forceGrayscaleCheckBox->setChecked(s.value("forceGrayscale", false).toBool());
+  ui.jbig2ThreshSpinBox->setValue(s.value("jbig2Thresh", 85).toInt());
+  ui.textLayerCheckBox->setChecked(s.value("textLayer", true).toBool());
+}
+
+
+void
+QDjViewPdfTextExporter::saveProperties(QString group)
+{
+  QSettings s;
+  if (group.isEmpty()) group = "Export-" + name();
+  s.beginGroup(group);
+  s.setValue("dpi", ui.dpiComboBox->currentText().split(' ').first().toInt());
+  s.setValue("jpegQuality", ui.jpegQualitySpinBox->value());
+  s.setValue("bgScale", ui.bgScaleSpinBox->value());
+  s.setValue("forceGrayscale", ui.forceGrayscaleCheckBox->isChecked());
+  s.setValue("jbig2Thresh", ui.jbig2ThreshSpinBox->value());
+  s.setValue("textLayer", ui.textLayerCheckBox->isChecked());
+}
+
+
+int
+QDjViewPdfTextExporter::propertyPages()
+{
+  return 1;
+}
+
+
+QWidget*
+QDjViewPdfTextExporter::propertyPage(int num)
+{
+  return (num == 0) ? settingsPage : nullptr;
+}
+
+
+void
+QDjViewPdfTextExporter::closeFile()
+{
+  if (logFile_.isOpen()) {
+    if (curStatus > DDJVU_JOB_OK)
+      logFile_.write(QByteArray("EXPORT FAILED status=")
+                     + QByteArray::number((int)curStatus) + "\n");
+    else
+      logFile_.write("EXPORT OK\n");
+    logFile_.close();
+  }
+  // Clean up any remaining PIX* bitmaps (e.g. if export was aborted).
+  for (PIX *pix : jbig2Pixes_)
+    if (pix) pixDestroy(&pix);
+  jbig2Pixes_.clear();
+  deferredPages_.clear();
+  if (!rawPdf) return;
+  if (curStatus > DDJVU_JOB_OK)
+    rawPdf->abandon();   // delete partial file on failure
   else
-    message = tr("Unable to reopen temporary file.");
-  // close all
-  if (input)
-    TIFFClose(input);
-  if (output)
-    fclose(output);
-  if (file.openMode())
-    file.close();
-  if (pdfFile.openMode())
-    pdfFile.close();
-  if (tempFile.openMode())
-    tempFile.close();
-  if (tempFile.exists())
-    tempFile.remove();
-#else
-  message = tr("PDF export was not compiled.");
-#endif
-  if (!message.isEmpty())
-    {
-      curStatus = DDJVU_JOB_FAILED;
-      error(message, __FILE__, __LINE__);
-    }
+    rawPdf->finalize();
+  delete rawPdf;
+  rawPdf = nullptr;
 }
 
 
-bool 
-QDjViewPdfExporter::save(QString fname)
+bool
+QDjViewPdfTextExporter::save(QString fname)
 {
-  if (file.openMode() || tempFile.openMode() || pdfFile.openMode())
+  if (rawPdf) return false;   // already running
+  outFileName = fname;
+  const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
+  // Open debug log next to the PDF file.
+  logFile_.setFileName(fname + ".log");
+  (void)logFile_.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text);
+  if (logFile_.isOpen())
+    logFile_.write(QByteArray("PDF export log: ") + fname.toUtf8() + "\n"
+                   "dpi=" + QByteArray::number(ui.dpiComboBox->currentText().split(' ').first().toInt())
+                   + " jpegQ=" + QByteArray::number(jpegQ)
+                   + " bgScale=" + QByteArray::number(ui.bgScaleSpinBox->value())
+                   + " gray=" + QByteArray::number(ui.forceGrayscaleCheckBox->isChecked())
+                   + " jbig2thresh=" + QByteArray::number(ui.jbig2ThreshSpinBox->value())
+                   + "\n");
+  rawPdf = new RawPdfWriter();
+  if (!rawPdf->open(fname, jpegQ)) {
+    delete rawPdf;
+    rawPdf = nullptr;
     return false;
-  pdfFile.setFileName(fname);
-  tempFile.setFileTemplate(fname);
-  if (tempFile.open())
-    {
-      file.setFileName(tempFile.fileName());
-      tempFile.close();
-      return start();
+  }
+  return start();
+}
+
+
+void
+QDjViewPdfTextExporter::doPage()
+{
+  QDjVuPage     *page     = curPage;
+  QDjVuDocument *document = djview->getDocument();
+  const int pageno  = page->pageNo();
+  const int imgdpi  = ddjvu_page_get_resolution(*page);
+  const int srcW    = ddjvu_page_get_width(*page);
+  const int srcH    = ddjvu_page_get_height(*page);
+
+  // Physical page dimensions derived from DjVu page's own DPI.
+  const double mmW = srcW * 25.4 / imgdpi;
+  const double mmH = srcH * 25.4 / imgdpi;
+
+  // Render at min(imgdpi, outDpi) to avoid unnecessary upscaling.
+  const int outDpi    = qBound(72, ui.dpiComboBox->currentText().split(' ').first().toInt(), 1200);
+  const int renderDpi = qMin(imgdpi, outDpi);
+  const int renderW   = qMax(1, (srcW * renderDpi + imgdpi / 2) / imgdpi);
+  const int renderH   = qMax(1, (srcH * renderDpi + imgdpi / 2) / imgdpi);
+
+  // Determine render mode from viewer's current display setting.
+  ddjvu_render_mode_t renderMode = DDJVU_RENDER_COLOR;
+  {
+    QDjVuWidget::DisplayMode dm = djview->getDjVuWidget()->displayMode();
+    if      (dm == QDjVuWidget::DISPLAY_STENCIL) renderMode = DDJVU_RENDER_BLACK;
+    else if (dm == QDjVuWidget::DISPLAY_BG)      renderMode = DDJVU_RENDER_BACKGROUND;
+    else if (dm == QDjVuWidget::DISPLAY_FG)      renderMode = DDJVU_RENDER_FOREGROUND;
+  }
+
+  // Render always into RGB888 first — ddjvu_page_get_type() returns
+  // PAGETYPE_UNKNOWN until decoding completes (i.e. until after render).
+  ddjvu_rect_t rect; rect.x = rect.y = 0;
+  rect.w = (unsigned)renderW;
+  rect.h = (unsigned)renderH;
+  ddjvu_format_t *fmt = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+  ddjvu_format_set_row_order(fmt, 1);
+  ddjvu_format_set_gamma(fmt, 2.2);
+  QImage qimg(renderW, renderH, QImage::Format_RGB888);
+  qimg.fill(Qt::white);
+  const bool renderOk = ddjvu_page_render(
+    *page, renderMode, &rect, &rect, fmt,
+    qimg.bytesPerLine(), reinterpret_cast<char *>(qimg.bits()));
+  ddjvu_format_release(fmt);
+  if (!renderOk) qimg.fill(Qt::white);
+
+  // NOW type is known (decode completed during render).
+  // For BITONAL pages rendered at reduced DPI: re-render at native DPI so
+  // that the hard threshold binarization doesn't destroy fine details
+  // (chess diagrams, thin lines, small font strokes etc.).
+  // The page is already decoded so re-render is essentially free.
+  const bool isBitonalEarly = (ddjvu_page_get_type(*page) == DDJVU_PAGETYPE_BITONAL);
+  if (isBitonalEarly && renderDpi < imgdpi) {
+    const int nativeW = srcW;
+    const int nativeH = srcH;
+    ddjvu_rect_t nrect; nrect.x = nrect.y = 0;
+    nrect.w = (unsigned)nativeW;
+    nrect.h = (unsigned)nativeH;
+    ddjvu_format_t *fmt2 = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+    ddjvu_format_set_row_order(fmt2, 1);
+    ddjvu_format_set_gamma(fmt2, 2.2);
+    QImage nimg(nativeW, nativeH, QImage::Format_RGB888);
+    nimg.fill(Qt::white);
+    if (ddjvu_page_render(*page, renderMode, &nrect, &nrect, fmt2,
+                          nimg.bytesPerLine(), reinterpret_cast<char *>(nimg.bits())))
+      qimg = std::move(nimg);   // replace with native-DPI image
+    ddjvu_format_release(fmt2);
+  }
+
+  // Convert to grayscale if:
+  //   a) page is explicitly BITONAL — never has color, or
+  //   b) stencil/black render mode, or
+  //   c) rendered image has no significant chroma (compound pages that
+  //      have only a Sjbz stencil with no IW44 color background also
+  //      render as pure B&W even though type=COMPOUND).
+  // Quick chroma check: sample every Nth pixel; if no pixel has
+  // max(|R-G|,|G-B|,|R-B|) > 16, treat as grayscale.
+  bool useGray = (ddjvu_page_get_type(*page) == DDJVU_PAGETYPE_BITONAL)
+              || (renderMode == DDJVU_RENDER_BLACK);
+  if (!useGray && qimg.format() == QImage::Format_RGB888) {
+    const uchar *bits = qimg.constBits();
+    const int   total = qimg.width() * qimg.height();
+    const int   step  = qMax(1, total / 2000); // sample ~2000 pixels
+    bool hasColor = false;
+    for (int px = 0; px < total && !hasColor; px += step) {
+      const uchar *p = bits + px * 3;
+      int diff = qMax(qAbs((int)p[0]-(int)p[1]),
+                       qMax(qAbs((int)p[1]-(int)p[2]),
+                            qAbs((int)p[0]-(int)p[2])));
+      if (diff > 16) hasColor = true;
     }
-  // prepare error message
-  QString message = tr("Unable to create temporary file.");
-  if (! tempFile.errorString().isEmpty())
-    message = tr("System error: %1.").arg(tempFile.errorString());
-  error(message, __FILE__, __LINE__);
-  return false;
+    useGray = !hasColor;
+  }
+  if (ui.forceGrayscaleCheckBox->isChecked())
+    useGray = true;
+
+  // COMPOUND pages: 3-layer — BG JPEG + FG FlateDecode + JBIG2 mask.
+  bool forceJbig2 = isBitonalEarly;
+  const ddjvu_page_type_t earlyType = ddjvu_page_get_type(*page);
+  if (earlyType == DDJVU_PAGETYPE_COMPOUND && renderMode == DDJVU_RENDER_COLOR) {
+    const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
+
+    // 1. BG: RENDER_BACKGROUND JPEG (IW44 layer, no stencil)
+    //    Downscale by bgScale factor (default 3x → ~100 dpi at 300 output).
+    //    The background is low-frequency (paper, photos) — doesn't need full dpi.
+    const int bgScale = qBound(1, ui.bgScaleSpinBox->value(), 12);
+    const int bgW = qMax(1, renderW / bgScale);
+    const int bgH = qMax(1, renderH / bgScale);
+    QByteArray bgData;
+    bool bgIsGray = false;
+    {
+      ddjvu_rect_t brect; brect.x = brect.y = 0;
+      brect.w = (unsigned)bgW; brect.h = (unsigned)bgH;
+      ddjvu_format_t *fmtBg = ddjvu_format_create(DDJVU_FORMAT_RGB24, 0, nullptr);
+      ddjvu_format_set_row_order(fmtBg, 1);
+      QImage bgImg(bgW, bgH, QImage::Format_RGB888);
+      bgImg.fill(Qt::white);
+      const bool bgOk = ddjvu_page_render(*page, DDJVU_RENDER_BACKGROUND,
+                           &brect, &brect, fmtBg,
+                           bgImg.bytesPerLine(),
+                           reinterpret_cast<char *>(bgImg.bits()));
+      ddjvu_format_release(fmtBg);
+      if (bgOk) {
+        const uchar *bits = bgImg.constBits();
+        const int total = bgW * bgH;
+        const int step = qMax(1, total / 2000);
+        bool hasColor = false;
+        for (int px = 0; px < total && !hasColor; px += step) {
+          const uchar *p = bits + px * 3;
+          int diff = qMax(qAbs((int)p[0]-(int)p[1]),
+                         qMax(qAbs((int)p[1]-(int)p[2]),
+                              qAbs((int)p[0]-(int)p[2])));
+          if (diff > 16) hasColor = true;
+        }
+        bgIsGray = !hasColor;
+        if (ui.forceGrayscaleCheckBox->isChecked())
+          bgIsGray = true;
+        if (bgIsGray) {
+          bgData = encodeJpegGray(bgImg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
+        } else {
+          QBuffer buf(&bgData); buf.open(QIODevice::WriteOnly);
+          QImageWriter writer(&buf, "JPEG"); writer.setQuality(jpegQ);
+          writer.write(bgImg);
+        }
+      }
+    }
+
+    // 2. FGbz palette analysis: use DjVuLibre internals to classify colors.
+    //    DjVuPalette has 2-4 colors.  colordata[blitno] = palette index per blit.
+    //    We find which palette color is "fill" (non-black, non-white)
+    //    and compute its PDF gray level. Then in step 4 we split the JB2 mask
+    //    into text-only and fill-only masks using blit-by-blit iteration.
+    bool hasFills = false;
+    double fillGray = 0.0;
+    int fillColorIdx = -1;   // palette index of the fill color (-1 = none)
+    GP<DjVuImage> djvuImg;
+    GP<DjVuPalette> fgbc;
+    GP<JB2Image> fgjb;
+    {
+      djvuImg = ddjvu_get_DjVuImage(*page);
+      if (djvuImg) {
+        fgbc = djvuImg->get_fgbc();
+        fgjb = djvuImg->get_fgjb();
+      }
+      if (fgbc && fgbc->size() > 0) {
+        // Scan palette colors: find fill = not black and not white
+        for (int ci = 0; ci < fgbc->size(); ++ci) {
+          unsigned char bgr[3];
+          fgbc->index_to_color(ci, bgr);
+          int brightness = ((int)bgr[2] + (int)bgr[1] + (int)bgr[0]) / 3;  // bgr→avg
+          if (brightness >= 32 && brightness <= 224) {
+            // This is a fill color (gray or colored, not pure black/white)
+            hasFills = true;
+            fillColorIdx = ci;
+            fillGray = brightness / 255.0;  // PDF: 0=black, 1=white
+            break;  // use the first fill color found
+          }
+        }
+        if (logFile_.isOpen()) {
+          QByteArray palLog = "  FGbz palette: nColors=" + QByteArray::number(fgbc->size());
+          for (int ci = 0; ci < fgbc->size(); ++ci) {
+            unsigned char bgr[3];
+            fgbc->index_to_color(ci, bgr);
+            palLog += " c" + QByteArray::number(ci) + "=(" 
+              + QByteArray::number(bgr[2]) + "," + QByteArray::number(bgr[1]) 
+              + "," + QByteArray::number(bgr[0]) + ")";
+          }
+          palLog += " fillIdx=" + QByteArray::number(fillColorIdx)
+                  + " fillGray=" + QByteArray::number(fillGray, 'f', 3) + "\n";
+          logFile_.write(palLog);
+          logFile_.flush();
+        }
+      }
+    }
+
+    // 3. Mask: render to PIX* at native DPI for multi-page JBIG2 symbol
+    //    dictionary.  Native DPI gives max quality and matches BITONAL pages
+    //    (better cross-page symbol sharing in the dictionary).
+    PIX *maskPix = renderBlackToPix1bpp(*page, srcW, srcH);
+
+    // 4. If fills detected, build fill-only mask from JB2 blits.
+    //    The ORIGINAL maskPix (from RENDER_BLACK) serves as the "full" mask
+    //    containing ALL ink (text + fill) — this is proven to work correctly.
+    //    The fill mask contains only fill blits.
+    //    Paint order in PDF: BG → full mask (0 g = black) → fill mask (gray).
+    //    The gray fill mask overrides the black in fill areas, while text
+    //    areas stay black (fill mask is transparent there).
+    PIX *fillMaskPix = nullptr;
+    if (hasFills && maskPix && fgjb && fgbc 
+        && fgbc->colordata.size() == fgjb->get_blit_count()) {
+      fillMaskPix = pixCreate(srcW, srcH, 1);
+      if (fillMaskPix) {
+        // Initialize to all-paper (all 1s = transparent in ImageMask)
+        const int wpl = pixGetWpl(fillMaskPix);
+        memset(pixGetData(fillMaskPix), 0xFF, (size_t)wpl * 4 * srcH);
+
+        const int blitCount = fgjb->get_blit_count();
+        const int imgH = fgjb->get_height();  // JB2 image height (= srcH)
+        for (int bi = 0; bi < blitCount; ++bi) {
+          const int colorIdx = fgbc->colordata[bi];
+          if (colorIdx != fillColorIdx) continue;  // skip text blits
+
+          const JB2Blit *blit = fgjb->get_blit(bi);
+          const JB2Shape &shape = fgjb->get_shape(blit->shapeno);
+          GP<GBitmap> gbm = shape.bits;
+          if (!gbm) continue;
+          const int shW = gbm->columns();
+          const int shH = gbm->rows();
+          // JB2 blit: left, bottom in DjVu coords (bottom-left origin).
+          // Convert to top-left origin for Leptonica PIX.
+          const int bx = (int)blit->left;
+          const int by = imgH - (int)blit->bottom - shH;
+
+          for (int sy = 0; sy < shH; ++sy) {
+            const int py = by + sy;
+            if (py < 0 || py >= srcH) continue;
+            l_uint32 *line = pixGetData(fillMaskPix) + (size_t)py * wpl;
+            const unsigned char *row = (*gbm)[shH - 1 - sy];  // row 0 = bottom
+            for (int sx = 0; sx < shW; ++sx) {
+              const int px = bx + sx;
+              if (px < 0 || px >= srcW) continue;
+              if (row[sx])  // non-zero = ink
+                CLEAR_DATA_BIT(line, px);  // 0 = paint in ImageMask
+            }
+          }
+        }
+        // maskPix stays unchanged — it's the full RENDER_BLACK mask.
+        if (logFile_.isOpen()) {
+          logFile_.write("  Fill-mask built: " + QByteArray::number(blitCount) 
+            + " blits, fillColorIdx=" + QByteArray::number(fillColorIdx) + "\n");
+          logFile_.flush();
+        }
+      }
+    }
+
+    if (!bgData.isEmpty() && maskPix) {
+      QVector<PdfWordZone> words;
+      if (ui.textLayerCheckBox->isChecked() && document) {
+        miniexp_t textExpr = document->getPageText(pageno);
+        if (textExpr != miniexp_dummy && textExpr != miniexp_nil)
+          pdfCollectWords(textExpr, words);
+      }
+      if (logFile_.isOpen()) {
+        logFile_.write("page=" + QByteArray::number(pageno + 1)
+          + " srcW=" + QByteArray::number(srcW) + " srcH=" + QByteArray::number(srcH)
+          + " renderW=" + QByteArray::number(renderW) + " renderH=" + QByteArray::number(renderH)
+          + " type=3 bgGray=" + QByteArray(bgIsGray ? "1" : "0")
+          + " hasFills=" + QByteArray(hasFills ? "1" : "0")
+          + " fillGray=" + QByteArray::number(fillGray, 'f', 3)
+          + " words=" + QByteArray::number(words.size())
+          + " [COMPOUND_DEFERRED]\n"
+          + "  bgSize=" + QByteArray::number(bgData.size()) + "\n");
+        logFile_.flush();
+      }
+      DeferredPageData d;
+      d.type = DeferredPageData::PAGE_COMPOUND;
+      d.mmW = mmW; d.mmH = mmH;
+      d.srcW = srcW; d.srcH = srcH;
+      d.bgData = bgData; d.bgW = bgW; d.bgH = bgH; d.bgIsGray = bgIsGray;
+      d.hasFills = hasFills;
+      d.fillGray = fillGray;
+      d.maskW = srcW; d.maskH = srcH;
+      d.jbig2Index = jbig2Pixes_.size();
+      jbig2Pixes_.append(maskPix);
+      d.fillMaskPix = fillMaskPix;  // ownership transferred; encoded separately
+      d.words = words;
+      deferredPages_.append(d);
+      return;
+    }
+    if (maskPix) pixDestroy(&maskPix);
+    if (fillMaskPix) pixDestroy(&fillMaskPix);
+    // fallback: fall through to single-image JPEG path
+  }
+
+
+  if (useGray) {
+    QImage gray = qimg.convertToFormat(QImage::Format_Grayscale8);
+    if (!gray.isNull()) qimg = std::move(gray);
+  }
+
+  const int pageType = (int)ddjvu_page_get_type(*page);
+  const bool isBitonal = (pageType == (int)DDJVU_PAGETYPE_BITONAL);
+  if (logFile_.isOpen()) {
+    QByteArray line = "page=" + QByteArray::number(pageno + 1)
+      + " srcW=" + QByteArray::number(srcW)
+      + " srcH=" + QByteArray::number(srcH)
+      + " imgdpi=" + QByteArray::number(imgdpi)
+      + " renderW=" + QByteArray::number(renderW)
+      + " renderH=" + QByteArray::number(renderH)
+      + " imgW=" + QByteArray::number(qimg.width())
+      + " imgH=" + QByteArray::number(qimg.height())
+      + " type=" + QByteArray::number(pageType)
+      + " gray=" + QByteArray(useGray ? "1" : "0")
+      + " bitonal=" + QByteArray(isBitonal ? "1" : "0")
+      + " jbig2=" + QByteArray(forceJbig2 ? "1" : "0")
+      + " renderOk=" + (renderOk ? "1" : "0")
+      + "\n";
+    logFile_.write(line);
+    logFile_.flush();
+  }
+
+  // Collect invisible text words (if requested).
+  QVector<PdfWordZone> words;
+  if (ui.textLayerCheckBox->isChecked() && document) {
+    miniexp_t textExpr = document->getPageText(pageno);
+    if (textExpr != miniexp_dummy && textExpr != miniexp_nil)
+      pdfCollectWords(textExpr, words);
+  }
+
+  // BITONAL: buffer PIX* for multi-page JBIG2 symbol dictionary in doFinal().
+  const bool isGrayImg = (qimg.format() == QImage::Format_Grayscale8);
+  if (isGrayImg && forceJbig2) {
+    PIX *maskPix = renderBlackToPix1bpp(*page, qimg.width(), qimg.height());
+    if (maskPix) {
+      DeferredPageData d;
+      d.type = DeferredPageData::PAGE_BITONAL;
+      d.mmW = mmW; d.mmH = mmH;
+      d.srcW = srcW; d.srcH = srcH;
+      d.maskW = qimg.width(); d.maskH = qimg.height();
+      d.jbig2Index = jbig2Pixes_.size();
+      d.words = words;
+      jbig2Pixes_.append(maskPix);
+      deferredPages_.append(d);
+      if (logFile_.isOpen()) {
+        logFile_.write("  [BITONAL_DEFERRED] maskW=" + QByteArray::number(d.maskW)
+          + " maskH=" + QByteArray::number(d.maskH)
+          + " words=" + QByteArray::number(words.size()) + "\n");
+        logFile_.flush();
+      }
+      return;
+    }
+    // PIX render failed — fall through to JPEG fallback
+    if (logFile_.isOpen()) logFile_.write("  renderBlackToPix1bpp FAILED, fallback JPEG\n");
+  }
+
+  // PHOTO / fallback: encode JPEG and buffer for writing in doFinal().
+  const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
+  QByteArray imgData;
+
+  if (isGrayImg) {
+    imgData = encodeJpegGray(qimg, jpegQ);
+    if (imgData.isEmpty()) {
+      if (logFile_.isOpen()) logFile_.write("  encodeJpegGray FAILED, fallback RGB\n");
+      QImage rgb = qimg.convertToFormat(QImage::Format_RGB888);
+      QBuffer b(&imgData); b.open(QIODevice::WriteOnly);
+      QImageWriter w(&b, "JPEG"); w.setQuality(jpegQ); w.write(rgb);
+    }
+  } else {
+    QBuffer buf(&imgData);
+    buf.open(QIODevice::WriteOnly);
+    QImageWriter writer(&buf, "JPEG");
+    writer.setQuality(jpegQ);
+    if (!writer.write(qimg)) {
+      if (logFile_.isOpen())
+        logFile_.write("  JPEG encode FAILED: " + writer.errorString().toUtf8() + "\n");
+      imgData.clear();
+    }
+  }
+  if (imgData.isEmpty()) {
+    QImage white(qimg.width(), qimg.height(), QImage::Format_RGB888);
+    white.fill(Qt::white);
+    QBuffer b2(&imgData); b2.open(QIODevice::WriteOnly);
+    QImageWriter w2(&b2, "JPEG"); w2.setQuality(75);
+    if (!w2.write(white)) {
+      if (logFile_.isOpen()) logFile_.write("  fallback white RGB JPEG FAILED\n");
+      error(tr("Failed to write PDF page %1: JPEG plugin unavailable.").arg(pageno + 1),
+            __FILE__, __LINE__);
+      return;
+    }
+  }
+
+  {
+    DeferredPageData d;
+    d.type = DeferredPageData::PAGE_PHOTO_JPEG;
+    d.mmW = mmW; d.mmH = mmH;
+    d.jpegData = imgData;
+    d.jpegW = qimg.width(); d.jpegH = qimg.height();
+    d.jpegIsGray = isGrayImg;
+    d.words = words;
+    deferredPages_.append(d);
+  }
+  if (logFile_.isOpen()) {
+    logFile_.write("  [PHOTO_DEFERRED] jpegSize=" + QByteArray::number(imgData.size()) + "\n");
+    logFile_.flush();
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// doFinal() — called after all pages are decoded and doPage()'d.
+// Runs the JBIG2 multi-page encoder to build a shared symbol dictionary,
+// then writes all deferred pages (with /JBIG2Globals reference) to the PDF.
+void
+QDjViewPdfTextExporter::doFinal()
+{
+  if (!rawPdf || deferredPages_.isEmpty()) return;
+
+  // --- Phase 1: build JBIG2 globals (shared symbol dictionary) ---
+  int globalsObj = 0;
+  QVector<QByteArray> perPageJbig2;
+
+  if (!jbig2Pixes_.isEmpty()) {
+    // thresh: from UI (default 85% = 0.85), weight=0.5, xres/yres=0 (use PIX res),
+    // full_headers=false (PDF embedding), refine_level=-1 (no refinement).
+    const float jbig2Thresh = qBound(50, ui.jbig2ThreshSpinBox->value(), 100) / 100.0f;
+    struct jbig2ctx *ctx = jbig2_init(jbig2Thresh, 0.5f, 0, 0,
+                                      /*full_headers=*/false,
+                                      /*refine_level=*/-1);
+    if (ctx) {
+      for (int i = 0; i < jbig2Pixes_.size(); ++i)
+        jbig2_add_page(ctx, jbig2Pixes_[i]);
+
+      // Encode the global symbol table.
+      int globalsLen = 0;
+      uint8_t *globalsData = jbig2_pages_complete(ctx, &globalsLen);
+      if (globalsData && globalsLen > 0) {
+        QByteArray gba(reinterpret_cast<const char *>(globalsData), globalsLen);
+        free(globalsData);
+        globalsObj = rawPdf->writeJbig2Globals(gba);
+        if (logFile_.isOpen()) {
+          logFile_.write("JBIG2 globals: symbols across "
+            + QByteArray::number(jbig2Pixes_.size()) + " pages, globalsSize="
+            + QByteArray::number(gba.size()) + " obj=" + QByteArray::number(globalsObj) + "\n");
+        }
+      } else {
+        if (logFile_.isOpen())
+          logFile_.write("JBIG2 globals: jbig2_pages_complete FAILED, fallback generic\n");
+      }
+
+      // Encode per-page JBIG2 streams referencing the globals.
+      perPageJbig2.resize(jbig2Pixes_.size());
+      for (int i = 0; i < jbig2Pixes_.size(); ++i) {
+        int pageLen = 0;
+        uint8_t *pageData = jbig2_produce_page(ctx, i, -1, -1, &pageLen);
+        if (pageData && pageLen > 0) {
+          perPageJbig2[i] = QByteArray(reinterpret_cast<const char *>(pageData), pageLen);
+          free(pageData);
+        }
+        if (logFile_.isOpen()) {
+          logFile_.write("  jbig2 page " + QByteArray::number(i)
+            + " size=" + QByteArray::number(perPageJbig2[i].size()) + "\n");
+        }
+      }
+      jbig2_destroy(ctx);
+    } else {
+      if (logFile_.isOpen())
+        logFile_.write("JBIG2 globals: jbig2_init FAILED, fallback generic\n");
+    }
+  }
+
+  // --- Phase 2: write all deferred pages to PDF in order ---
+  for (int pi = 0; pi < deferredPages_.size(); ++pi) {
+    const DeferredPageData &d = deferredPages_[pi];
+    bool ok = false;
+
+    switch (d.type) {
+    case DeferredPageData::PAGE_COMPOUND: {
+      // Get per-page JBIG2 stream (with symbol dictionary references).
+      QByteArray stencilData;
+      if (d.jbig2Index >= 0 && d.jbig2Index < perPageJbig2.size())
+        stencilData = perPageJbig2[d.jbig2Index];
+      // Fallback: single-page generic encoding (no globals).
+      int actualGlobals = globalsObj;
+      if (stencilData.isEmpty() && d.jbig2Index >= 0
+          && d.jbig2Index < jbig2Pixes_.size()) {
+        int len = 0;
+        uint8_t *data = jbig2_encode_generic(jbig2Pixes_[d.jbig2Index],
+                          false, 0, 0, false, &len);
+        if (data && len > 0) {
+          stencilData = QByteArray(reinterpret_cast<const char *>(data), len);
+          free(data);
+        }
+        actualGlobals = 0;  // single-page generic → no globals reference
+        if (logFile_.isOpen())
+          logFile_.write("  page " + QByteArray::number(pi) + " COMPOUND fallback generic\n");
+      }
+      if (!stencilData.isEmpty()) {
+        if (d.hasFills && d.fillMaskPix) {
+          // Dual-mask: BG + fill JBIG2 (gray) + text JBIG2 (black).
+          // Fill mask encoded as generic JBIG2 (no shared symbol dictionary)
+          // because fill shapes are fundamentally different from text glyphs.
+          QByteArray fillData;
+          {
+            int len2 = 0;
+            uint8_t *data2 = jbig2_encode_generic(d.fillMaskPix,
+                               false, 0, 0, false, &len2);
+            if (data2 && len2 > 0) {
+              fillData = QByteArray(reinterpret_cast<const char *>(data2), len2);
+              free(data2);
+            }
+          }
+          if (!fillData.isEmpty()) {
+            ok = rawPdf->addBgDualMaskPage(
+              d.mmW, d.mmH,
+              d.bgData, d.bgW, d.bgH, d.bgIsGray,
+              stencilData, d.maskW, d.maskH,
+              fillData, d.fillGray,
+              d.words, d.srcW, d.srcH,
+              actualGlobals);
+            // Fill mask uses generic JBIG2 (no globals reference)
+            // but text mask uses shared globals via actualGlobals.
+          }
+          if (!ok) {
+            // Fallback to single mask if dual failed
+            ok = rawPdf->addBgMaskPage(
+              d.mmW, d.mmH,
+              d.bgData, d.bgW, d.bgH, d.bgIsGray,
+              stencilData, d.maskW, d.maskH,
+              d.words, d.srcW, d.srcH,
+              actualGlobals);
+          }
+        } else {
+          // 2-layer: BG + black stencil (no fills detected).
+          ok = rawPdf->addBgMaskPage(
+            d.mmW, d.mmH,
+            d.bgData, d.bgW, d.bgH, d.bgIsGray,
+            stencilData, d.maskW, d.maskH,
+            d.words, d.srcW, d.srcH,
+            actualGlobals);
+        }
+      }
+      break;
+    }
+    case DeferredPageData::PAGE_BITONAL: {
+      QByteArray stencilData;
+      if (d.jbig2Index >= 0 && d.jbig2Index < perPageJbig2.size())
+        stencilData = perPageJbig2[d.jbig2Index];
+      int actualGlobals = globalsObj;
+      if (stencilData.isEmpty() && d.jbig2Index >= 0
+          && d.jbig2Index < jbig2Pixes_.size()) {
+        int len = 0;
+        uint8_t *data = jbig2_encode_generic(jbig2Pixes_[d.jbig2Index],
+                          false, 0, 0, false, &len);
+        if (data && len > 0) {
+          stencilData = QByteArray(reinterpret_cast<const char *>(data), len);
+          free(data);
+        }
+        actualGlobals = 0;
+        if (logFile_.isOpen())
+          logFile_.write("  page " + QByteArray::number(pi) + " BITONAL fallback generic\n");
+      }
+      if (!stencilData.isEmpty()) {
+        ok = rawPdf->addPage(d.mmW, d.mmH,
+              stencilData, d.maskW, d.maskH,
+              /*isGray=*/true, /*isJbig2=*/true,
+              d.words, actualGlobals);
+      }
+      break;
+    }
+    case DeferredPageData::PAGE_PHOTO_JPEG:
+      ok = rawPdf->addPage(d.mmW, d.mmH,
+            d.jpegData, d.jpegW, d.jpegH,
+            d.jpegIsGray, /*isJbig2=*/false,
+            d.words, /*jbig2GlobalsObj=*/0);
+      break;
+    }
+
+    if (!ok) {
+      if (logFile_.isOpen())
+        logFile_.write("  doFinal: page " + QByteArray::number(pi)
+          + " write FAILED type=" + QByteArray::number((int)d.type) + "\n");
+      error(tr("Failed to write PDF page %1.").arg(pi + 1), __FILE__, __LINE__);
+    }
+  }
+
+  // --- Phase 3: cleanup ---
+  const int totalPages = deferredPages_.size();
+  for (PIX *pix : jbig2Pixes_)
+    if (pix) pixDestroy(&pix);
+  jbig2Pixes_.clear();
+  for (auto &d : deferredPages_)
+    if (d.fillMaskPix) { pixDestroy(&d.fillMaskPix); d.fillMaskPix = nullptr; }
+  deferredPages_.clear();
+  perPageJbig2.clear();
+
+  if (logFile_.isOpen()) {
+    logFile_.write("doFinal: complete, globalsObj=" + QByteArray::number(globalsObj)
+      + " totalPages=" + QByteArray::number(totalPages) + "\n");
+    logFile_.flush();
+  }
 }
 
 
@@ -2329,9 +3858,7 @@ static void
 createExporterData()
 {
   QDjViewDjVuExporter::setup();
-#if HAVE_TIFF2PDF
-  QDjViewPdfExporter::setup();
-#endif
+  QDjViewPdfTextExporter::setup();   // always available – no TIFF required
 #if HAVE_TIFF
   QDjViewTiffExporter::setup();
 #endif

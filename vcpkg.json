@@ -4,6 +4,7 @@
   "description": "DjView4 – DjVu document viewer",
   "dependencies": [
     "qtbase",
-    "qttools"
+    "qttools",
+    "leptonica"
   ]
 }
