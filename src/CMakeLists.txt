@@ -181,20 +181,46 @@ target_link_libraries(djview PRIVATE JPEG::JPEG)
 
 # ---------------------------------------------------------------------------
 # jbig2enc – JBIG2 encoding for 1bpp B&W pages (much better than JPEG/G4).
-# Fetched from upstream at configure time; Leptonica supplied via vcpkg.
+# Fetched from upstream at configure time; Leptonica supplied via vcpkg
+# or by the system package manager on Linux.
 # ---------------------------------------------------------------------------
 include(FetchContent)
-find_package(Leptonica REQUIRED)   # vcpkg supplies this (leptonica port)
+set(_leptonica_target "")
+set(_leptonica_include_dirs "")
+
+find_package(Leptonica CONFIG QUIET)
+if(Leptonica_FOUND)
+    if(TARGET leptonica)
+        set(_leptonica_target leptonica)
+    elseif(TARGET Leptonica::Leptonica)
+        set(_leptonica_target Leptonica::Leptonica)
+    endif()
+    if(DEFINED Leptonica_INCLUDE_DIRS)
+        set(_leptonica_include_dirs ${Leptonica_INCLUDE_DIRS})
+    endif()
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(Leptonica REQUIRED IMPORTED_TARGET lept)
+    set(_leptonica_target PkgConfig::Leptonica)
+    set(_leptonica_include_dirs ${Leptonica_INCLUDE_DIRS})
+endif()
+
 FetchContent_Declare(jbig2enc
     GIT_REPOSITORY https://github.com/agl/jbig2enc
     GIT_TAG        master
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(jbig2enc)
-target_link_libraries(djview PRIVATE libjbig2enc ${Leptonica_LIBRARIES})
+
+if(_leptonica_target)
+    target_link_libraries(djview PRIVATE libjbig2enc ${_leptonica_target})
+else()
+    target_link_libraries(djview PRIVATE libjbig2enc ${Leptonica_LIBRARIES})
+endif()
+
 target_include_directories(djview PRIVATE
     "${jbig2enc_SOURCE_DIR}/src"
-    ${Leptonica_INCLUDE_DIRS}
+    ${_leptonica_include_dirs}
 )
 
 # ---------------------------------------------------------------------------
