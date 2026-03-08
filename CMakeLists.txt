@@ -32,6 +32,11 @@ option(DJVIEW_BUILD_TRANSLATIONS
 set(DJVIEW_DJVU_INSTALL_DIR ""
     CACHE PATH "Optional path to a prebuilt DjVuLibreExperimental install prefix")
 
+# Optional path to a DjVuLibreExperimental build tree. Needed when DjView uses
+# internal libdjvu headers because they depend on the generated config.h.
+set(DJVIEW_DJVU_BUILD_DIR ""
+    CACHE PATH "Optional path to a DjVuLibreExperimental build dir containing generated/config.h")
+
 # When ON, configure DjVuLibreExperimental as a CMake subdirectory via
 # FetchContent.  Uses the sibling directory if it exists (local dev), otherwise
 # clones the develop branch from GitHub.

@@ -20,6 +20,24 @@ if(NOT DJVIEW_DJVU_SOURCE_DIR)
     endif()
 endif()
 
+if(NOT DJVIEW_DJVU_BUILD_DIR)
+    set(_djvu_build_candidates
+        "${DJVIEW_DJVU_SOURCE_DIR}/build"
+        "${CMAKE_SOURCE_DIR}/djvulibre-build"
+        "${CMAKE_SOURCE_DIR}/djvulibre-build-wsl"
+        "${CMAKE_SOURCE_DIR}/../djvulibre-build"
+        "${CMAKE_SOURCE_DIR}/../djvulibre-build-wsl"
+        "${CMAKE_SOURCE_DIR}/../DjVuLibreExperimental/build"
+    )
+    foreach(_djvu_build_candidate IN LISTS _djvu_build_candidates)
+        if(_djvu_build_candidate AND EXISTS "${_djvu_build_candidate}/generated/config.h")
+            get_filename_component(DJVIEW_DJVU_BUILD_DIR
+                "${_djvu_build_candidate}" ABSOLUTE)
+            break()
+        endif()
+    endforeach()
+endif()
+
 set(_git_info_out "${CMAKE_CURRENT_BINARY_DIR}/build_git_info.h")
 set(_git_info_script "${CMAKE_SOURCE_DIR}/cmake/GenerateBuildGitInfo.cmake")
 
@@ -160,15 +178,34 @@ elseif(TARGET djvulibre)
     target_link_libraries(djview PRIVATE djvulibre)
 endif()
 
+find_package(Threads REQUIRED)
+
 # Internal DjVuLibre headers (DjVuImage.h, DjVuPalette.h, JB2Image.h, ...)
 # needed for ddjvu_get_DjVuImage() backdoor and direct palette access.
 if(DJVIEW_DJVU_SOURCE_DIR)
     target_include_directories(djview PRIVATE
         "${DJVIEW_DJVU_SOURCE_DIR}/libdjvu"
     )
+    if(DJVIEW_DJVU_BUILD_DIR AND EXISTS "${DJVIEW_DJVU_BUILD_DIR}/generated/config.h")
+        target_include_directories(djview PRIVATE
+            "${DJVIEW_DJVU_BUILD_DIR}/generated"
+        )
+        target_compile_definitions(djview PRIVATE HAVE_CONFIG_H=1)
+    else()
+        message(WARNING
+            "DjView4: internal libdjvu headers are enabled, but generated/config.h "
+            "was not found. Set DJVIEW_DJVU_BUILD_DIR to the DjVuLibre build dir.")
+    endif()
     # DjVuLibre wraps classes in namespace DJVU when HAVE_NAMESPACES is set.
     # The DLL was built with it, so we must match.
     target_compile_definitions(djview PRIVATE HAVE_NAMESPACES=1)
+    if(NOT WIN32)
+        # Internal libdjvu headers rely on HAVE_PTHREAD when used outside the
+        # libdjvu build tree, but that definition is not exported by the
+        # installed/public DjVuLibre target.
+        target_compile_definitions(djview PRIVATE HAVE_PTHREAD=1)
+        target_link_libraries(djview PRIVATE Threads::Threads)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------
