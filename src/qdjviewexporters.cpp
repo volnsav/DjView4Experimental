@@ -33,8 +33,10 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
+#include <sys/stat.h>
 #if HAVE_SYS_TYPES_H
 # include <sys/types.h>
 #endif

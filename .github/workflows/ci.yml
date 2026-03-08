@@ -44,6 +44,7 @@ jobs:
             qt6-base-dev qt6-base-dev-tools \
             qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools \
             libjpeg-dev libtiff-dev zlib1g-dev libgtest-dev \
+            libleptonica-dev \
             libgl1-mesa-dev
 
       - name: Build and install DjVuLibre
@@ -103,6 +104,7 @@ jobs:
             qt6-base-dev qt6-base-dev-tools \
             qt6-tools-dev qt6-tools-dev-tools qt6-l10n-tools \
             libjpeg-dev libtiff-dev zlib1g-dev \
+            libleptonica-dev \
             libgl1-mesa-dev
 
       - name: Build and install DjVuLibre
@@ -171,16 +173,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-vcpkg-qt6-
 
-      - name: Install Qt6 via vcpkg
+      - name: Install vcpkg manifest dependencies
         shell: pwsh
         env:
           VCPKG_ROOT: ${{ github.workspace }}\vcpkg
         run: |
           $triplet = if ("${{ matrix.config }}" -eq "Release") { "x64-windows-release" } else { "x64-windows" }
           .\vcpkg\vcpkg.exe install `
+            --x-manifest-root=. `
             --overlay-triplets=.github/vcpkg-triplets `
-            --triplet=$triplet `
-            qtbase qttools
+            --triplet=$triplet
 
       - name: Build and install DjVuLibre
         shell: pwsh
@@ -286,16 +288,16 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-arm64-vcpkg-qt6-
 
-      - name: Install Qt6 via vcpkg
+      - name: Install vcpkg manifest dependencies
         shell: pwsh
         env:
           VCPKG_ROOT: ${{ github.workspace }}\vcpkg
         run: |
           $triplet = if ("${{ matrix.config }}" -eq "Release") { "arm64-windows-release" } else { "arm64-windows" }
           .\vcpkg\vcpkg.exe install `
+            --x-manifest-root=. `
             --overlay-triplets=.github/vcpkg-triplets `
-            --triplet=$triplet `
-            qtbase qttools
+            --triplet=$triplet
 
       - name: Build and install DjVuLibre
         shell: pwsh
