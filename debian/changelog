@@ -1,3 +1,12 @@
+djview4 (4.14-1) experimental; urgency=medium
+
+  * Version 4.14
+  * PDF export with JBIG2 compression, text layer, dual-mask fills
+  * Settings: DPI presets, BG downscale, force grayscale, JBIG2 threshold
+  * jbig2enc via FetchContent, Leptonica via vcpkg
+
+ -- Volodymyr Savchenko <volnsav@github>  Sat, 08 Mar 2026 12:00:00 +0200
+
 djview4 (4.13-1) experimental; urgency=medium
 
   * Version 4.13

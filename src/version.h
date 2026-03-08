@@ -11,10 +11,10 @@
 # define DJVIEW_APP "DjView"
 #endif
 #ifndef DJVIEW_VERSION
-# define DJVIEW_VERSION 0x40d00
-# define DJVIEW_VERSION_STR "4.13"
-# define RC_VERSION 4,13,0,0
-# define RC_VERSION_STR "4,13,0,0\0"
+# define DJVIEW_VERSION 0x40e00
+# define DJVIEW_VERSION_STR "4.14"
+# define RC_VERSION 4,14,0,0
+# define RC_VERSION_STR "4,14,0,0\0"
 #endif
 
 #ifndef DJVULIBRE_UI_VERSION_STR

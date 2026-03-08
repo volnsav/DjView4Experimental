@@ -1,5 +1,5 @@
 %define release 1
-%define version 4.13
+%define version 4.14
 
 Summary: DjVu viewer
 Name: djview4
@@ -47,6 +47,10 @@ rm -rf %{buildroot}
 %{_mandir}/man1/
 
 %changelog
+* Sat Mar 08 2026 Volodymyr <volnsav@github> 4.14-1
+- Version 4.14: PDF export with JBIG2 compression, text layer, dual-mask fills
+- Settings: DPI presets, BG downscale, force grayscale, JBIG2 threshold
+
 * Fri Mar 06 2026 Volodymyr <volnsav@github> 4.13-1
 - Version 4.13: Qt6 migration, tabbed document window, dark-theme rendering fix
 - CMake-only build system; drop autotools/qmake legacy
