@@ -44,6 +44,47 @@ Use this checklist after dependency updates, renderer changes, or CI/build scrip
 - Export to PDF/PS path works (if feature enabled in build).
 - Print dialog opens and preview/print path does not crash.
 
+### 6.1 PDF Export — Page Routing Logic
+
+The PDF exporter (`QDjViewPdfTextExporter`) classifies each DjVu page
+into one of three deferred types during `doPage()`, then writes them
+all in `doFinal()` after building a shared JBIG2 symbol dictionary.
+
+```
+DjVu page
+│
+├─ COMPOUND + RENDER_COLOR
+│   ├─ BG render OK + mask render OK
+│   │   → PAGE_COMPOUND (deferred)
+│   │     • BG layer:    JPEG  (DCTDecode, color or grayscale)
+│   │     • Text mask:   JBIG2 (shared symbol dictionary across pages)
+│   │     • Fill mask:   JBIG2 generic (separate, with /Decode [1 0])
+│   │
+│   └─ BG or mask render failed → fall-through to JPEG
+│
+├─ BITONAL (or forceJbig2 flag)
+│   ├─ renderBlackToPix1bpp OK
+│   │   → PAGE_BITONAL (deferred)
+│   │     • Pure JBIG2 (shared symbol dictionary), no JPEG
+│   │
+│   └─ PIX render failed → fall-through to JPEG
+│
+└─ PHOTO / any fallback
+    → PAGE_PHOTO_JPEG
+      • Pure JPEG (DCTDecode, color or grayscale), no JBIG2
+```
+
+**Settings tab controls:**
+
+| Control | Values | Default | Affects |
+|---------|--------|---------|---------|
+| Max resolution | 72, 100, 150, 200, 300, 600 dpi | 300 | Render resolution cap for all page types |
+| JPEG quality | 1–100 | 75 | DCTDecode quality for BG and photo pages |
+| BG downscale | 1–12× | 3× | BG layer resolution = render ÷ factor |
+| Force grayscale | on/off | off | 1-channel JPEG for all images |
+| JBIG2 threshold | 50–100% | 85% | Symbol similarity for glyph merging |
+| Text layer | on/off | on | Invisible text overlay for search/copy |
+
 ## 7. Session/Preferences
 
 - Preference dialog opens and saves changes.

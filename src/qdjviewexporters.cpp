@@ -2633,6 +2633,12 @@ QDjViewPdfTextExporter::QDjViewPdfTextExporter(QDialog *parent, QDjView *djview,
        "The resolution box limits the maximum output image resolution. "
        "JPEG quality controls image compression "
        "(1&nbsp;=&nbsp;worst, 100&nbsp;=&nbsp;best). "
+       "The background downscale factor reduces the resolution of "
+       "photo/background layers (higher&nbsp;=&nbsp;smaller file, lower quality). "
+       "Force grayscale encodes all images as 1-channel, saving space "
+       "for B&amp;W scanned documents. "
+       "The JBIG2 similarity threshold controls how aggressively "
+       "similar glyphs are merged (lower&nbsp;=&nbsp;smaller file, less accurate). "
        "Enabling the text layer embeds the hidden OCR/text stored in "
        "the DjVu file as an invisible overlay, making the PDF "
        "searchable and allowing copy-paste of text."
@@ -2650,8 +2656,11 @@ QDjViewPdfTextExporter::~QDjViewPdfTextExporter()
 void
 QDjViewPdfTextExporter::resetProperties()
 {
-  ui.dpiSpinBox->setValue(300);
+  ui.dpiComboBox->setCurrentIndex(4);  // 300 dpi
   ui.jpegQualitySpinBox->setValue(75);
+  ui.bgScaleSpinBox->setValue(3);
+  ui.forceGrayscaleCheckBox->setChecked(false);
+  ui.jbig2ThreshSpinBox->setValue(85);
   ui.textLayerCheckBox->setChecked(true);
 }
 
@@ -2662,8 +2671,15 @@ QDjViewPdfTextExporter::loadProperties(QString group)
   QSettings s;
   if (group.isEmpty()) group = "Export-" + name();
   s.beginGroup(group);
-  ui.dpiSpinBox->setValue(s.value("dpi", 300).toInt());
+  {
+    const int dpi = s.value("dpi", 300).toInt();
+    int idx = ui.dpiComboBox->findText(QString::number(dpi) + " dpi");
+    ui.dpiComboBox->setCurrentIndex(idx >= 0 ? idx : 4);
+  }
   ui.jpegQualitySpinBox->setValue(s.value("jpegQuality", 75).toInt());
+  ui.bgScaleSpinBox->setValue(s.value("bgScale", 3).toInt());
+  ui.forceGrayscaleCheckBox->setChecked(s.value("forceGrayscale", false).toBool());
+  ui.jbig2ThreshSpinBox->setValue(s.value("jbig2Thresh", 85).toInt());
   ui.textLayerCheckBox->setChecked(s.value("textLayer", true).toBool());
 }
 
@@ -2674,8 +2690,11 @@ QDjViewPdfTextExporter::saveProperties(QString group)
   QSettings s;
   if (group.isEmpty()) group = "Export-" + name();
   s.beginGroup(group);
-  s.setValue("dpi", ui.dpiSpinBox->value());
+  s.setValue("dpi", ui.dpiComboBox->currentText().split(' ').first().toInt());
   s.setValue("jpegQuality", ui.jpegQualitySpinBox->value());
+  s.setValue("bgScale", ui.bgScaleSpinBox->value());
+  s.setValue("forceGrayscale", ui.forceGrayscaleCheckBox->isChecked());
+  s.setValue("jbig2Thresh", ui.jbig2ThreshSpinBox->value());
   s.setValue("textLayer", ui.textLayerCheckBox->isChecked());
 }
 
@@ -2731,8 +2750,12 @@ QDjViewPdfTextExporter::save(QString fname)
   (void)logFile_.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text);
   if (logFile_.isOpen())
     logFile_.write(QByteArray("PDF export log: ") + fname.toUtf8() + "\n"
-                   "dpi=" + QByteArray::number(ui.dpiSpinBox->value())
-                   + " jpegQ=" + QByteArray::number(jpegQ) + "\n");
+                   "dpi=" + QByteArray::number(ui.dpiComboBox->currentText().split(' ').first().toInt())
+                   + " jpegQ=" + QByteArray::number(jpegQ)
+                   + " bgScale=" + QByteArray::number(ui.bgScaleSpinBox->value())
+                   + " gray=" + QByteArray::number(ui.forceGrayscaleCheckBox->isChecked())
+                   + " jbig2thresh=" + QByteArray::number(ui.jbig2ThreshSpinBox->value())
+                   + "\n");
   rawPdf = new RawPdfWriter();
   if (!rawPdf->open(fname, jpegQ)) {
     delete rawPdf;
@@ -2758,7 +2781,7 @@ QDjViewPdfTextExporter::doPage()
   const double mmH = srcH * 25.4 / imgdpi;
 
   // Render at min(imgdpi, outDpi) to avoid unnecessary upscaling.
-  const int outDpi    = qBound(72, ui.dpiSpinBox->value(), 1200);
+  const int outDpi    = qBound(72, ui.dpiComboBox->currentText().split(' ').first().toInt(), 1200);
   const int renderDpi = qMin(imgdpi, outDpi);
   const int renderW   = qMax(1, (srcW * renderDpi + imgdpi / 2) / imgdpi);
   const int renderH   = qMax(1, (srcH * renderDpi + imgdpi / 2) / imgdpi);
@@ -2835,6 +2858,8 @@ QDjViewPdfTextExporter::doPage()
     }
     useGray = !hasColor;
   }
+  if (ui.forceGrayscaleCheckBox->isChecked())
+    useGray = true;
 
   // COMPOUND pages: 3-layer — BG JPEG + FG FlateDecode + JBIG2 mask.
   bool forceJbig2 = isBitonalEarly;
@@ -2843,10 +2868,11 @@ QDjViewPdfTextExporter::doPage()
     const int jpegQ = qBound(1, ui.jpegQualitySpinBox->value(), 100);
 
     // 1. BG: RENDER_BACKGROUND JPEG (IW44 layer, no stencil)
-    //    Render at ~100 dpi (1/3 of renderDpi) to match DjVu's IW44 resolution.
-    //    The background is low-frequency (paper, photos) — doesn't need 300 dpi.
-    const int bgW = qMax(1, renderW / 3);
-    const int bgH = qMax(1, renderH / 3);
+    //    Downscale by bgScale factor (default 3x → ~100 dpi at 300 output).
+    //    The background is low-frequency (paper, photos) — doesn't need full dpi.
+    const int bgScale = qBound(1, ui.bgScaleSpinBox->value(), 12);
+    const int bgW = qMax(1, renderW / bgScale);
+    const int bgH = qMax(1, renderH / bgScale);
     QByteArray bgData;
     bool bgIsGray = false;
     {
@@ -2874,6 +2900,8 @@ QDjViewPdfTextExporter::doPage()
           if (diff > 16) hasColor = true;
         }
         bgIsGray = !hasColor;
+        if (ui.forceGrayscaleCheckBox->isChecked())
+          bgIsGray = true;
         if (bgIsGray) {
           bgData = encodeJpegGray(bgImg.convertToFormat(QImage::Format_Grayscale8), jpegQ);
         } else {
@@ -3159,9 +3187,10 @@ QDjViewPdfTextExporter::doFinal()
   QVector<QByteArray> perPageJbig2;
 
   if (!jbig2Pixes_.isEmpty()) {
-    // thresh=0.85 standard, weight=0.5, xres/yres=0 (use PIX res),
+    // thresh: from UI (default 85% = 0.85), weight=0.5, xres/yres=0 (use PIX res),
     // full_headers=false (PDF embedding), refine_level=-1 (no refinement).
-    struct jbig2ctx *ctx = jbig2_init(0.85f, 0.5f, 0, 0,
+    const float jbig2Thresh = qBound(50, ui.jbig2ThreshSpinBox->value(), 100) / 100.0f;
+    struct jbig2ctx *ctx = jbig2_init(jbig2Thresh, 0.5f, 0, 0,
                                       /*full_headers=*/false,
                                       /*refine_level=*/-1);
     if (ctx) {
