@@ -6,11 +6,16 @@ set(CMAKE_AUTORCC ON)
 # build_git_info.h  – generated at every build from git describe
 # ---------------------------------------------------------------------------
 # Optional: set DJVIEW_DJVU_SOURCE_DIR to the DjVuLibreExperimental checkout;
-# if not set we try the sibling directory ../DjVuLibreExperimental.
+# if not set we try the child directory ./DjVuLibreExperimental first,
+# then the sibling directory ../DjVuLibreExperimental.
 if(NOT DJVIEW_DJVU_SOURCE_DIR)
+    get_filename_component(_djvu_child
+        "${CMAKE_SOURCE_DIR}/DjVuLibreExperimental" ABSOLUTE)
     get_filename_component(_djvu_sibling
         "${CMAKE_SOURCE_DIR}/../DjVuLibreExperimental" ABSOLUTE)
-    if(IS_DIRECTORY "${_djvu_sibling}")
+    if(IS_DIRECTORY "${_djvu_child}")
+        set(DJVIEW_DJVU_SOURCE_DIR "${_djvu_child}")
+    elseif(IS_DIRECTORY "${_djvu_sibling}")
         set(DJVIEW_DJVU_SOURCE_DIR "${_djvu_sibling}")
     endif()
 endif()
